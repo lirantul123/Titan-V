@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TITAN_ENGINE // GEOSPATIAL_v11_MODES</title>
+    <title>TITAN_v19 // INTEGRATED_VIEW</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;800&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -11,85 +11,113 @@
     
     <style>
         :root { --neon-cyan: #00f3ff; --alert-red: #ff3131; }
-        body { background-color: #020203; font-family: 'Inter', sans-serif; overflow: hidden; color: #e0e0e0; cursor: crosshair; }
-        .glass { background: rgba(10, 12, 18, 0.9); backdrop-filter: blur(16px); border: 1px solid rgba(0, 243, 255, 0.2); }
+        body { background-color: #020203; font-family: 'Inter', sans-serif; overflow: hidden; color: #e0e0e0; cursor: none; }
+        .glass { background: rgba(10, 12, 18, 0.95); backdrop-filter: blur(20px); border: 1px solid rgba(0, 243, 255, 0.2); }
         .data-font { font-family: 'JetBrains Mono', monospace; }
         
-        #map { background: #000; height: 100%; width: 100%; }
+        #map { background: #000; height: 100%; width: 100%; cursor: none !important; }
+        .leaflet-container, .leaflet-interactive { cursor: none !important; }
 
-        #cursor-line-v { position: fixed; top: 0; width: 1px; height: 100%; background: rgba(0, 243, 255, 0.1); pointer-events: none; z-index: 99; }
-        #cursor-line-h { position: fixed; left: 0; height: 1px; width: 100%; background: rgba(0, 243, 255, 0.1); pointer-events: none; z-index: 99; }
+        /* Crosshair */
+        #crosshair-v, #crosshair-h { position: fixed; background: var(--neon-cyan); pointer-events: none; z-index: 9999; opacity: 0.6; box-shadow: 0 0 8px var(--neon-cyan); }
+        #crosshair-v { top: 0; width: 1px; height: 100%; }
+        #crosshair-h { left: 0; height: 1px; width: 100%; }
+
+        /* Intel Card Animation */
+        #intel-card { transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); transform: translateX(130%); }
+        #intel-card.visible { transform: translateX(0); }
         
+        /* List Aesthetics */
+        .target-item { border-left: 2px solid transparent; transition: all 0.3s; }
+        .target-item:hover { background: rgba(255, 255, 255, 0.03); }
+        .target-item.active-lock { border-left-color: var(--neon-cyan); background: rgba(0, 243, 255, 0.07); }
+
+        #cmd-directory { display: none; }
+        #cmd-directory.active { display: block; position: absolute; bottom: 100%; left: 0; width: 100%; background: #080a0f; border: 1px solid var(--neon-cyan); z-index: 5000; margin-bottom: 8px; }
+
+        .btn-delete { color: rgba(255, 255, 255, 0.2); transition: all 0.2s; }
+        .btn-delete:hover { color: var(--alert-red); transform: scale(1.2); }
+
         .mode-btn { transition: all 0.3s; border: 1px solid rgba(0, 243, 255, 0.1); }
         .mode-btn.active { background: var(--neon-cyan); color: #000; font-weight: 900; box-shadow: 0 0 15px var(--neon-cyan); }
 
-        #cmd-directory { 
-            display: none; position: absolute; bottom: calc(100% + 10px); left: 0; width: 100%; 
-            background: #080a0f; border: 1px solid var(--neon-cyan); z-index: 100; 
-        }
-
-        .scanning-bar { position: absolute; width: 100%; height: 3px; background: var(--neon-cyan); top: 0; left: 0; z-index: 1001; pointer-events: none; opacity: 0; box-shadow: 0 0 15px var(--neon-cyan); }
-        .active-scan .scanning-bar { animation: scan-anim 2s linear infinite; opacity: 1; }
-        @keyframes scan-anim { 0% { top: 0; } 100% { top: 100%; } }
+        ::-webkit-scrollbar { width: 3px; }
+        ::-webkit-scrollbar-thumb { background: var(--neon-cyan); }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-    <div id="cursor-line-v"></div>
-    <div id="cursor-line-h"></div>
+    <div id="crosshair-v"></div>
+    <div id="crosshair-h"></div>
 
-    <main class="w-full max-w-[1750px] h-[92vh] flex flex-col gap-4 relative">
-        <header class="flex justify-between items-center px-8 py-5 glass rounded-lg border-cyan-500/30">
-            <div class="flex items-center gap-10">
+    <main class="w-full max-w-[1850px] h-[96vh] flex flex-col gap-4">
+        <header class="flex justify-between items-center px-8 py-4 glass rounded-lg border-cyan-500/20">
+            <div class="flex items-center gap-12">
                 <div>
-                    <h1 class="text-3xl font-black tracking-tighter uppercase italic text-white leading-none">Titan_v11</h1>
-                    <span class="text-[10px] text-cyan-400 data-font font-bold tracking-[0.2em]">MULTI_MODE_OS</span>
+                    <h1 class="text-3xl font-black tracking-tighter uppercase italic text-white leading-none">Titan_v19</h1>
+                    <span class="text-[9px] text-cyan-400 data-font font-bold tracking-[0.4em]">DUAL_LAYER_ENABLED</span>
                 </div>
-                
-                <!-- MODE SWITCHER -->
                 <div class="flex gap-2">
-                    <button id="btn-dark" onclick="setMode('dark')" class="mode-btn active px-3 py-1 text-[10px] data-font rounded">DEEP_GRID</button>
-                    <button id="btn-sat" onclick="setMode('sat')" class="mode-btn px-3 py-1 text-[10px] data-font rounded">SAT_STREAM</button>
+                    <button id="btn-dark" onclick="setMode('dark')" class="mode-btn active px-4 py-1 text-[10px] data-font rounded">GRID</button>
+                    <button id="btn-sat" onclick="setMode('sat')" class="mode-btn px-4 py-1 text-[10px] data-font rounded">SAT_STREAM</button>
                 </div>
             </div>
-
             <div class="text-right">
                 <p class="text-xl font-bold data-font text-white" id="clock">00:00:00</p>
-                <span id="ping-val" class="text-[9px] text-cyan-500 font-black tracking-widest">MS_SYNC_OK</span>
+                <span class="text-[9px] text-cyan-500 font-black" id="ping">LATENCY: 8MS</span>
             </div>
         </header>
 
         <div class="grid grid-cols-12 gap-4 flex-grow overflow-hidden">
-            <div class="col-span-3 glass rounded-lg p-6 flex flex-col">
-                <h3 class="text-[11px] font-black text-cyan-500 uppercase tracking-widest mb-6">Network_Grid</h3>
-                <div id="nodes" class="space-y-6"></div>
+            <!-- TARGET BUFFER -->
+            <div class="col-span-3 glass rounded-lg p-6 flex flex-col overflow-hidden">
+                <h3 class="text-[10px] font-black text-cyan-500 uppercase tracking-widest mb-6 underline decoration-cyan-500/30 underline-offset-8">Coordinate_Registry</h3>
+                <div class="flex gap-2 mb-6">
+                    <input type="text" id="search-input" class="flex-grow bg-black/50 border border-white/10 p-3 text-xs data-font text-white focus:border-cyan-500 outline-none uppercase" placeholder="LOC_QUERY">
+                    <button onclick="addTarget()" class="px-4 bg-cyan-500/10 border border-cyan-500/40 text-cyan-400 text-[10px] font-black hover:bg-cyan-500 hover:text-black transition-all">LOAD</button>
+                </div>
+                <div id="target-list" class="flex-grow space-y-2 overflow-y-auto pr-2"></div>
             </div>
 
-            <div class="col-span-6 glass rounded-lg relative overflow-hidden" id="map-viewport">
-                <div class="scanning-bar"></div>
+            <!-- VIEWPORT -->
+            <div class="col-span-6 relative rounded-lg overflow-hidden glass border-none">
                 <div id="map"></div>
-                <div class="absolute top-6 left-6 z-[1000]">
-                    <div class="bg-black/90 px-4 py-2 border-l-2 border-cyan-400 shadow-2xl">
-                        <span class="text-[9px] text-white/40 block">LAT_LNG_STREAM</span>
-                        <span id="coord-display" class="text-xs data-font text-white font-bold">0.000, 0.000</span>
+                
+                <div id="intel-card" class="absolute top-6 right-6 z-[1000] w-64 glass p-5 border-l-2 border-cyan-500 shadow-2xl">
+                    <span class="text-[8px] text-cyan-400 font-bold data-font block mb-4 uppercase tracking-widest">Atmospheric_Telemetry</span>
+                    <h2 id="intel-name" class="text-xl font-black text-white mb-1 tracking-tighter uppercase">---</h2>
+                    <p id="intel-coords" class="text-[10px] data-font text-white/30 mb-6 tracking-widest">0.00, 0.00</p>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="bg-black/40 p-3 border border-white/5 rounded">
+                            <span class="text-[8px] block text-white/20 mb-1 uppercase">Heat</span>
+                            <span id="intel-temp" class="text-lg font-bold text-white data-font">--°C</span>
+                        </div>
+                        <div class="bg-black/40 p-3 border border-white/5 rounded">
+                            <span class="text-[8px] block text-white/20 mb-1 uppercase">Wind</span>
+                            <span id="intel-wind" class="text-lg font-bold text-white data-font">--KM/H</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="absolute bottom-6 left-6 z-[1000]">
+                    <div class="bg-black/90 px-4 py-2 border border-white/10">
+                        <span id="coord-display" class="text-xs data-font text-cyan-400 font-bold tracking-widest">0.0000 | 0.0000</span>
                     </div>
                 </div>
             </div>
 
+            <!-- TERMINAL -->
             <div class="col-span-3 glass rounded-lg flex flex-col overflow-hidden">
-                <div id="log" class="flex-grow p-6 data-font text-[12px] space-y-4 overflow-y-auto text-white/50">
-                    <div class="text-cyan-400 font-bold">MODES_LOADED // DARK_MATTER_ACTIVE</div>
+                <div id="log" class="flex-grow p-6 data-font text-[11px] space-y-4 overflow-y-auto text-white/50">
+                    <div class="text-cyan-400 font-bold">>> SYSTEM_READY</div>
                 </div>
-
                 <div class="p-6 bg-black/60 border-t border-white/10 relative">
-                    <div id="cmd-directory" class="rounded-t overflow-hidden">
-                        <div id="suggest-list" class="p-2"></div>
+                    <div id="cmd-directory" class="rounded overflow-hidden shadow-2xl">
+                        <div id="suggest-list"></div>
                     </div>
                     <div class="flex items-center gap-4">
                         <span class="text-cyan-500 font-black text-xl">»</span>
-                        <input type="text" id="input" autocomplete="off" autofocus
-                               class="bg-transparent border-none outline-none text-sm data-font w-full text-white placeholder-cyan-900 uppercase" 
-                               placeholder="CMD_">
+                        <input type="text" id="input" autocomplete="off" autofocus class="bg-transparent border-none outline-none text-sm data-font w-full text-white uppercase placeholder-cyan-900" placeholder="TYPE '\' FOR PROTOCOLS">
                     </div>
                 </div>
             </div>
@@ -97,106 +125,177 @@
     </main>
 
     <script>
-        const DATABASE = [
-            { cmd: '\\SCAN', info: 'RADAR_PULSE' },
-            { cmd: '\\CLEAR', info: 'PURGE_LOGS' },
-            { cmd: '\\ALERT', info: 'SYS_WARNING' },
-            { cmd: '\\REBOOT', info: 'KERNEL_RESET' }
+        const PROTOCOLS = [
+            { cmd: '\\SCAN', info: 'PING_ALL_NODES' },
+            { cmd: '\\LOCATE [ID]', info: 'WARP TO TARGET (E.G. \\LOCATE 1)' },
+            { cmd: '\\CLEAR', info: 'PURGE_TERMINAL_LOG' },
+            { cmd: '\\HELP', info: 'INDEX_COMMANDS' }
         ];
 
-        // MAP SETUP
-        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([32.864, 35.291], 13);
+        let targetData = [], markers = [], cmdHistory = [], historyIndex = -1;
+        
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([20, 0], 2);
         
         const layers = {
             dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'),
             sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}')
         };
-
         layers.dark.addTo(map);
+
+        const input = document.getElementById('input');
+        const cmdDir = document.getElementById('cmd-directory');
+        const suggestList = document.getElementById('suggest-list');
+        const coordDisplay = document.getElementById('coord-display');
+
+        window.addEventListener('mousemove', (e) => {
+            document.getElementById('crosshair-v').style.left = e.clientX + 'px';
+            document.getElementById('crosshair-h').style.top = e.clientY + 'px';
+            const rect = document.getElementById('map').getBoundingClientRect();
+            if(e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+                const latlng = map.mouseEventToLatLng(e);
+                coordDisplay.innerText = `${latlng.lat.toFixed(4)} | ${latlng.lng.toFixed(4)}`;
+            }
+        });
+
+        function writeLog(text, status = 'default') {
+            const entry = document.createElement('div');
+            entry.className = status === 'cmd' ? 'text-cyan-400 font-bold border-l border-cyan-500 pl-2' : (status === 'error' ? 'text-red-500 font-black' : '');
+            entry.innerHTML = `<span class="opacity-20 mr-2">[${new Date().toLocaleTimeString('en-GB', { hour12: false })}]</span> ${text}`;
+            document.getElementById('log').appendChild(entry);
+            document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+        }
+
+        async function fetchWeather(lat, lon) {
+            try {
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+                const data = await res.json();
+                return data.current_weather;
+            } catch (e) { return null; }
+        }
+
+        function removeNode(id, event) {
+            event.stopPropagation();
+            const index = targetData.findIndex(t => t.id === id);
+            if(index > -1) {
+                map.removeLayer(markers[index]);
+                markers.splice(index, 1);
+                targetData.splice(index, 1);
+                writeLog(`NODE_REMOVED`, 'error');
+                renderList();
+                document.getElementById('intel-card').classList.remove('visible');
+            }
+        }
+
+        function renderList() {
+            const container = document.getElementById('target-list');
+            container.innerHTML = '';
+            targetData.forEach((node, i) => {
+                const item = document.createElement('div');
+                item.className = "target-item bg-white/5 p-4 rounded flex justify-between items-center text-[10px] data-font cursor-pointer";
+                item.onclick = () => runProtocol(`\\LOCATE ${i + 1}`);
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="text-cyan-500 font-black">[${i+1}]</span>
+                        <span class="text-white font-bold">${node.name}</span>
+                    </div>
+                    <button onclick="removeNode(${node.id}, event)" class="btn-delete font-black text-xs px-2">✕</button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        async function addTarget() {
+            const q = document.getElementById('search-input').value;
+            if(!q) return;
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                if(data.length > 0) {
+                    const node = { id: Date.now(), name: data[0].display_name.split(',')[0].toUpperCase(), lat: data[0].lat, lon: data[0].lon };
+                    targetData.push(node);
+                    const marker = L.circleMarker([node.lat, node.lon], { radius: 8, color: '#00f3ff', fillOpacity: 0.4 }).addTo(map);
+                    markers.push(marker);
+                    renderList();
+                    writeLog(`LOCKED: ${node.name}`, 'cmd');
+                    document.getElementById('search-input').value = '';
+                }
+            } catch(e) { writeLog("NET_ERROR", "error"); }
+        }
+
+        function runProtocol(raw) {
+            const inputVal = raw.toUpperCase().replace(/[\[\]]/g, '').trim();
+            const parts = inputVal.split(' ');
+            const cmd = parts[0];
+            const arg = parts[1];
+
+            cmdHistory.unshift(raw);
+            historyIndex = -1;
+
+            if(cmd === '\\SCAN' || cmd === 'SCAN') {
+                writeLog("INIT_SCAN...");
+                targetData.forEach(t => writeLog(`NODE_${t.name}: CONNECTED`));
+            } 
+            else if(cmd === '\\LOCATE' || cmd === 'LOCATE') {
+                const target = targetData[parseInt(arg) - 1] || targetData[targetData.length - 1];
+                if(target) {
+                    map.flyTo([target.lat, target.lon], 11);
+                    document.getElementById('intel-card').classList.add('visible');
+                    document.getElementById('intel-name').innerText = target.name;
+                    document.getElementById('intel-coords').innerText = `${parseFloat(target.lat).toFixed(4)}, ${parseFloat(target.lon).toFixed(4)}`;
+                    fetchWeather(target.lat, target.lon).then(w => {
+                        if(w) {
+                            document.getElementById('intel-temp').innerText = `${w.temperature}°C`;
+                            document.getElementById('intel-wind').innerText = `${w.windspeed}KM/H`;
+                        }
+                    });
+                    writeLog(`JUMP_SUCCESS: ${target.name}`, 'cmd');
+                } else { writeLog("INVALID_NODE_ID", "error"); }
+            }
+            else if(cmd === '\\CLEAR' || cmd === 'CLEAR') {
+                document.getElementById('log').innerHTML = '<div class="text-cyan-400 font-bold">>> TERMINAL_CLEARED</div>';
+            }
+            else if(cmd === '\\HELP' || cmd === 'HELP') {
+                writeLog("--- TITAN_PROTOCOLS ---", "cmd");
+                PROTOCOLS.forEach(p => writeLog(`${p.cmd} >> ${p.info}`));
+                writeLog("FOR LOCATE: USE THE NUMBER IN BRACKETS NEXT TO THE TARGET NAME.");
+            }
+
+            input.value = '';
+            cmdDir.classList.remove('active');
+        }
 
         function setMode(mode) {
             Object.values(layers).forEach(layer => map.removeLayer(layer));
             layers[mode].addTo(map);
-            
             document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
             document.getElementById(`btn-${mode}`).classList.add('active');
-            
-            writeLog(`MAP_MODE_CHANGED: ${mode.toUpperCase()}`, 'cmd');
-        }
-
-        // LOGIC & TERMINAL
-        const input = document.getElementById('input');
-        const logBox = document.getElementById('log');
-        const cmdDir = document.getElementById('cmd-directory');
-        const suggestList = document.getElementById('suggest-list');
-
-        function writeLog(text, status = 'default') {
-            const entry = document.createElement('div');
-            entry.className = status === 'cmd' ? 'text-cyan-400 font-bold' : (status === 'error' ? 'text-red-500 font-black' : 'text-white/60');
-            entry.innerHTML = `<span class="opacity-30 mr-2">[${new Date().toLocaleTimeString('en-GB', { hour12: false })}]</span> ${text}`;
-            logBox.appendChild(entry);
-            logBox.scrollTop = logBox.scrollHeight;
-        }
-
-        function runProtocol(raw) {
-            const cmdText = raw.toUpperCase().trim();
-            if (!cmdText) return;
-
-            const match = DATABASE.find(i => i.cmd === cmdText || i.cmd === `\\${cmdText}`);
-
-            if (match) {
-                writeLog(`EXECUTE: ${match.cmd}`, 'cmd');
-                if (match.cmd === '\\SCAN') {
-                    document.getElementById('map-viewport').classList.add('active-scan');
-                    setTimeout(() => document.getElementById('map-viewport').classList.remove('active-scan'), 2000);
-                } else if (match.cmd === '\\CLEAR') logBox.innerHTML = '';
-                else if (match.cmd === '\\REBOOT') location.reload();
-            } else {
-                writeLog(`INVALID_INPUT: ${cmdText}`, 'error');
-            }
-            input.value = '';
-            cmdDir.style.display = 'none';
+            writeLog(`VIEW_MODE: ${mode.toUpperCase()}`);
         }
 
         input.addEventListener('input', (e) => {
             const val = e.target.value.toUpperCase();
-            if (val.length > 0) {
-                const search = val.startsWith('\\') ? val : `\\${val}`;
-                const matches = DATABASE.filter(i => i.cmd.startsWith(search));
-                if (matches.length) {
-                    cmdDir.style.display = 'block';
+            if(val.startsWith('\\')) {
+                const matches = PROTOCOLS.filter(p => p.cmd.startsWith(val));
+                if(matches.length > 0) {
+                    cmdDir.classList.add('active');
                     suggestList.innerHTML = matches.map(m => `
-                        <div class="p-2 cursor-pointer hover:bg-cyan-500/10 text-[11px] data-font flex justify-between" onclick="runProtocol('${m.cmd}')">
-                            <span class="text-white">${m.cmd}</span>
-                            <span class="text-cyan-900 italic">${m.info}</span>
+                        <div class="p-3 cursor-pointer hover:bg-cyan-500/20 text-[10px] data-font flex justify-between border-b border-white/5" onclick="runProtocol('${m.cmd}')">
+                            <span class="text-cyan-400 font-black">${m.cmd}</span>
+                            <span class="text-white/20 uppercase">${m.info}</span>
                         </div>
                     `).join('');
-                } else cmdDir.style.display = 'none';
-            } else cmdDir.style.display = 'none';
+                } else { cmdDir.classList.remove('active'); }
+            } else { cmdDir.classList.remove('active'); }
         });
 
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runProtocol(input.value); });
-        
-        window.addEventListener('mousemove', (e) => {
-            document.getElementById('cursor-line-v').style.left = e.clientX + 'px';
-            document.getElementById('cursor-line-h').style.top = e.clientY + 'px';
+        input.addEventListener('keydown', (e) => {
+            if(e.key === 'Enter') runProtocol(input.value);
+            if(e.key === 'ArrowUp') { e.preventDefault(); if(historyIndex < cmdHistory.length-1) input.value = cmdHistory[++historyIndex]; }
         });
 
         setInterval(() => {
             document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-GB', { hour12: false });
-            document.getElementById('ping-val').innerText = `${Math.floor(Math.random()*15 + 5)}MS_SYNC_OK`;
         }, 1000);
-
-        map.on('move', () => {
-            const c = map.getCenter();
-            document.getElementById('coord-display').innerText = `${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}`;
-        });
-
-        window.runProtocol = runProtocol;
-        const nodeList = document.getElementById('nodes');
-        ['SAT_ALPHA', 'HUB_MAIN', 'GND_04'].forEach(name => {
-            nodeList.innerHTML += `<div class="space-y-2"><div class="flex justify-between text-[9px] font-black"><span class="text-white/40">${name}</span><span class="text-green-500">LINKED</span></div><div class="h-[1px] w-full bg-white/10 relative"><div class="absolute h-full bg-cyan-500 shadow-[0_0_8px_cyan]" style="width: ${Math.random()*100}%"></div></div></div>`;
-        });
     </script>
 </body>
 </html>
