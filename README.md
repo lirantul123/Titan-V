@@ -164,4 +164,4 @@ npm install
 
 ---
 
-*LIRAN TULCHINSKI — 2026*
+*LIRAN TULCHINSKI — fucking 2026*
