@@ -1,0 +1,14 @@
+# Dependencies
+node_modules
+
+# Vite build output
+dist
+
+# Local env (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+.vite

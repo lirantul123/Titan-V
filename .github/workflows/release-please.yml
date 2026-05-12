@@ -1,0 +1,65 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require releasable commits (feat / fix / helm) or release-please merge
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+            BEFORE="$(git rev-list --max-parents=0 "$AFTER" 2>/dev/null || true)"
+          fi
+          if [[ -z "$BEFORE" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FOUND=false
+          while IFS= read -r s; do
+            [[ -z "$s" ]] && continue
+            if [[ "$s" =~ ^(feat|fix|helm)(\([^)]+\))?!?: ]]; then
+              FOUND=true
+              break
+            fi
+            if [[ "$s" =~ ^chore(\([^)]*\))?:[[:space:]]+release ]]; then
+              FOUND=true
+              break
+            fi
+          done < <(git log "$BEFORE..$AFTER" --format='%s')
+
+          if [[ "$FOUND" == true ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  release-please:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          manifest-file: .release-please-manifest.json
+          config-file: release-please-config.json

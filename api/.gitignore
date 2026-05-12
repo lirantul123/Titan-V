@@ -1,0 +1,13 @@
+# Dependencies
+node_modules
+
+# TypeScript build output
+dist
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log

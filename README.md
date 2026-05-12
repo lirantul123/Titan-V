@@ -11,6 +11,7 @@
 - **Terminal:** Protocol autocomplete (`\`), command history (arrow up), and `\HELP` for the full index.
 - **Telemetry:** After `\LOCATE` or from `\WEATHER`, temperature and wind are loaded through the API (Open-Meteo on the server).
 - **API contract:** OpenAPI 3.1 spec, Swagger UI at `/docs`, JSON spec at `/openapi.json`.
+- **Frontend:** React 18 + TypeScript + Vite + Tailwind in `app/` (Leaflet remains imperative on a map container).
 
 ---
 
@@ -32,24 +33,33 @@ Default URL: **http://localhost:3000**
 
 Production-style run: `npm run build && npm start`
 
-### 2. Frontend (static `index.html`)
-
-Serve the **repository root** (where `index.html` lives), not only the `api/` folder:
+### 2. Frontend (`app/` — React + Vite)
 
 ```bash
-cd /path/to/Titan-V
-npx serve . -p 5173
+cd app
+npm install
+npm run dev
 ```
 
-Open **http://localhost:5173** (or the port your tool prints).
+Vite defaults to **http://localhost:5173**. The UI reads the API base from, in order:
 
-The UI defaults to `http://localhost:3000` as the API base. If the API runs elsewhere:
+1. `import.meta.env.VITE_API_BASE` (set in `app/.env`; see `app/.env.example`)
+2. `?api=http://host:port` on the Vite URL (also persisted as `titan_v_api_base` in `localStorage`)
+3. **`http://localhost:3000`**
 
-- One-time query (also saved to `localStorage` as `titan_v_api_base`):  
-  `http://localhost:5173/?api=http://127.0.0.1:3000`
-- Or set `titan_v_api_base` in the browser for your API origin (no trailing slash).
+So a typical dev setup is API on **3000** and Vite on **5173** with no extra config.
 
-Run **both** terminals (API + static server) for full behaviour (LOAD, delete, weather, ping, protocol sync).
+Preview the production bundle:
+
+```bash
+cd app
+npm run build
+npm run preview
+```
+
+The file **`index.html` at the repository root** is only a short pointer to the React app (for anyone opening the repo root in a browser). The real entry is **`app/index.html`** used by Vite.
+
+Run **both** `api` and `app` dev servers for full behaviour (LOAD, delete, weather, ping, protocol sync).
 
 ---
 
@@ -99,13 +109,48 @@ cd api
 npm test
 ```
 
+### Helm (OpenShift / Kubernetes)
+
+Charts live next to each service:
+
+| Chart | Path |
+| :--- | :--- |
+| API | `api/helm/titan-v-api/` |
+| Web UI | `app/helm/titan-v-app/` |
+
+Examples:
+
+```bash
+helm template titan-api ./api/helm/titan-v-api --set openshift.route.enabled=true
+helm upgrade --install titan-web ./app/helm/titan-v-app -n your-namespace \
+  --set image.repository=quay.io/org/titan-v-app --set image.tag=1.0.0 \
+  --set openshift.route.enabled=true
+```
+
+- **API** chart: `Deployment`, `Service`, optional **OpenShift `Route`**, probes on `/health`. Build the runtime image with `api/Containerfile` (expects `npm run build` in the image build stage).
+- **App** chart: nginx (default `nginxinc/nginx-unprivileged`) with a `ConfigMap` server block on port **8080**, optional **Route**. Build with `app/Containerfile` (multi-stage Vite → static files).
+
+Set `image.repository` / `image.tag` to your registry (for example OpenShift internal registry or Quay).
+
+### Releases & commits
+
+- **commitlint** (root `commitlint.config.mjs` + `.husky/commit-msg` + `.github/workflows/commitlint.yml`) validates conventional commits on pull requests. Types include **`feat`**, **`fix`**, **`helm`**, and the usual **`chore`**, **`docs`**, etc.
+- **release-please** (`.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`) bumps **`api`** and **`app`** `package.json` versions and syncs **`api/helm/titan-v-api/Chart.yaml`** and **`app/helm/titan-v-app/Chart.yaml`** (`version` / `appVersion`).
+- The workflow runs on pushes to **`main`** only when the pushed commits include **`feat:`**, **`fix:`**, or **`helm:`** (or a **`chore: release`** merge from release-please). See **`CONTRIBUTING.md`**.
+
+Root dev install (optional, for local hooks):
+
+```bash
+npm install
+```
+
 ---
 
 ## Technical stack
 
 | Layer | Technology |
 | :--- | :--- |
-| UI | HTML, Leaflet 1.9, Tailwind CDN, crosshair + glass layout |
+| UI | **React 18**, **TypeScript**, **Vite**, **Tailwind**, Leaflet 1.9 (map init in `app/src/App.tsx`) |
 | API | Node 20+, Express, TypeScript, CORS, Swagger UI, Vitest + Supertest |
 | Upstream | Nominatim (geocode), Open-Meteo (weather), public raster tile URLs in the browser |
 
@@ -119,4 +164,4 @@ npm test
 
 ---
 
-*LIRAN TULCHINSKI — 2026*
+*LIRAN TULCHINSKI — fucking 2026*

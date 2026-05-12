@@ -1,0 +1,17 @@
+Titan-V web UI deployed.
+
+{{- if .Values.openshift.route.enabled }}
+OpenShift Route enabled:
+
+  oc get route {{ include "titan-v-app.fullname" . }} -o jsonpath='{.spec.host}{"\n"}'
+
+{{- else }}
+Port-forward:
+
+  kubectl port-forward svc/{{ include "titan-v-app.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+Then open http://127.0.0.1:{{ .Values.service.port }}/
+
+{{- end }}
+
+Build the UI image with your CI: copy `app/dist` into an nginx image (see `app/Containerfile` if present).
