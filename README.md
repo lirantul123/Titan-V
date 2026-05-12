@@ -1,55 +1,122 @@
 # TITAN-V
-**Advanced Terminal-Based Geographic Intelligence System**
 
-TITAN is a high-performance web-based mapping interface designed for rapid coordinate logging, atmospheric telemetry retrieval, and dual-layer visual reconnaissance.
-
----
-
-## 🛠 Features
-
-*   **Dual-Layer Engine:** Seamlessly toggle between **Grid Vector** (Dark Mode) and **Satellite Stream** (ArcGIS Imagery).
-*   **Command Line Interface:** Integrated terminal supporting protocol-based navigation and buffer management.
-*   **Atmospheric Intel:** Real-time fetching of temperature and wind speed via Open-Meteo API.
-*   **Node Registry:** Persistent session logging of custom coordinates with index-based quick-warp functionality.
+**Terminal-driven geographic intelligence UI** with a Leaflet map, coordinate registry, atmospheric telemetry, and an optional **Node.js API** under `api/` for geocoding, weather, and shared target storage.
 
 ---
 
-## ⌨️ Command Protocols
+## Features
 
-Commands must be entered into the terminal located in the bottom-right sector.
+- **Map modes:** Five basemaps (Carto dark / light / Voyager, Esri imagery, Esri topo), switchable from the header or via `\MODE`. Last choice is stored in the browser as `titan_v_map_mode`.
+- **Coordinate registry:** Geocode a place, add targets, fly to them by index, remove entries. Registry data is persisted in the **API** while the server runs (in-memory store).
+- **Terminal:** Protocol autocomplete (`\`), command history (arrow up), and `\HELP` for the full index.
+- **Telemetry:** After `\LOCATE` or from `\WEATHER`, temperature and wind are loaded through the API (Open-Meteo on the server).
+- **API contract:** OpenAPI 3.1 spec, Swagger UI at `/docs`, JSON spec at `/openapi.json`.
 
-| Protocol | Argument | Description |
+---
+
+## Quick start
+
+### 1. Backend (`api/`)
+
+```bash
+cd api
+npm install
+npm run dev
+```
+
+Default URL: **http://localhost:3000**
+
+- **Swagger UI:** http://localhost:3000/docs  
+- **OpenAPI JSON:** http://localhost:3000/openapi.json  
+- **Health:** http://localhost:3000/health  
+
+Production-style run: `npm run build && npm start`
+
+### 2. Frontend (static `index.html`)
+
+Serve the **repository root** (where `index.html` lives), not only the `api/` folder:
+
+```bash
+cd /path/to/Titan-V
+npx serve . -p 5173
+```
+
+Open **http://localhost:5173** (or the port your tool prints).
+
+The UI defaults to `http://localhost:3000` as the API base. If the API runs elsewhere:
+
+- One-time query (also saved to `localStorage` as `titan_v_api_base`):  
+  `http://localhost:5173/?api=http://127.0.0.1:3000`
+- Or set `titan_v_api_base` in the browser for your API origin (no trailing slash).
+
+Run **both** terminals (API + static server) for full behaviour (LOAD, delete, weather, ping, protocol sync).
+
+---
+
+## Command protocols
+
+Enter commands in the bottom-right terminal. Prefix with `\` (autocomplete lists commands from the API after a successful sync, otherwise from the built-in list).
+
+| Protocol | Arguments | Description |
 | :--- | :--- | :--- |
-| `\LOCATE` | `[index/name]` | Warps viewport to the specified node ID or city name. |
-| `\SCAN` | N/A | Pings all active nodes in the buffer to verify uplink status. |
-| `\CLEAR` | N/A | Purges terminal log history (Area data remains persistent). |
-| `\HELP` | N/A | Displays the protocol index within the terminal. |
+| `\MODE` | `DARK` \| `LIGHT` \| `SAT` \| `TOPO` \| `VECTOR` | Switches basemap (aliases: `GRID`, `DAY`, `SAT_STREAM`, `TERRAIN`, `VOYAGER`). |
+| `\LOCATE` | `[index]` | Flies to the registry row with that index (e.g. `\LOCATE 1`). |
+| `\WEATHER` | `[index]` | Logs current weather for that target via the API. |
+| `\ADD` | `<query>` | Geocodes and creates a target (same flow as LOAD). |
+| `\GEOCODE` | `<query>` | Runs geocode only; logs top hit (does not add a target). |
+| `\SCAN` | — | Fetches targets from the API and logs uplink lines. |
+| `\SYNC` | — | Reloads protocols and targets from the API. |
+| `\PING` | — | Calls `/api/v1/system/ping` and logs round-trip timing. |
+| `\HEALTH` | — | Calls `GET /health`. |
+| `\DOCS` | — | Opens Swagger UI in a new tab. |
+| `\API` | — | Logs API base, OpenAPI URL, and docs URL. |
+| `\CLEAR` | — | Clears the terminal log. |
+| `\HELP` | — | Prints the protocol index. |
+
+**Sidebar:** `LOC_QUERY` + **LOAD** uses `POST /api/v1/geocode` then `POST /api/v1/targets`. Deleting a row calls `DELETE /api/v1/targets/:id`.
 
 ---
 
-## 🚀 Quick Start
+## API overview (`/api/v1`)
 
-1.  **Add a Node:** Enter a city name in the `LOC_QUERY` field in the left sidebar and click **LOAD**.
-2.  **Navigate:** Use `\LOCATE 1` in the terminal to fly to your first saved coordinate.
-3.  **Analyze:** Once warped, view the **Atmospheric Telemetry** card in the top-right for live weather data.
-4.  **Manage:** Hover over any item in the Registry to reveal the **[X]** button for node deletion.
+| Method | Path | Role |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Liveness JSON. |
+| `GET` | `/api/v1/protocols` | Terminal command list for UI sync. |
+| `GET` | `/api/v1/system/ping` | Server time; UI uses it for header latency. |
+| `POST` | `/api/v1/geocode` | Body `{ "q": "..." }` — forwards to Nominatim with a proper `User-Agent`. |
+| `GET` | `/api/v1/weather?lat=&lon=` | Proxies Open-Meteo `current_weather`. |
+| `GET` | `/api/v1/targets` | Lists targets. |
+| `POST` | `/api/v1/targets` | Body `{ "name", "lat", "lon" }` — creates a target. |
+| `DELETE` | `/api/v1/targets/:id` | Removes a target. |
+
+Details and schemas: `api/openapi/openapi.yaml`.
+
+### Tests
+
+```bash
+cd api
+npm test
+```
+
+---
+
+## Technical stack
+
+| Layer | Technology |
+| :--- | :--- |
+| UI | HTML, Leaflet 1.9, Tailwind CDN, crosshair + glass layout |
+| API | Node 20+, Express, TypeScript, CORS, Swagger UI, Vitest + Supertest |
+| Upstream | Nominatim (geocode), Open-Meteo (weather), public raster tile URLs in the browser |
 
 ---
 
-## 🔌 Technical Dependencies
+## Notes
 
-*   **Leaflet.js:** Open-source JavaScript library for mobile-friendly interactive maps.
-*   **Tailwind CSS:** Utility-first CSS framework for the "Glassmorphism" UI.
-*   **Open-Meteo API:** Used for high-resolution weather forecasting data.
-*   **Nominatim (OSM):** Geocoding service for address-to-coordinate translation.
-
----
-
-## ⚠️ System Notes
-
-*   **Latency Simulation:** The header displays a simulated "Ping" to mimic a live server connection.
-*   **Coordinate Tracking:** The crosshair system provides 4-decimal precision on mouse-over.
-*   **Interface:** Optimized for Chromium-based browsers in fullscreen mode.
+- **Attribution:** Map tiles are used without on-map attribution in the demo UI; for production, enable Leaflet attribution and comply with each provider’s terms.
+- **Crosshair:** Pointer is hidden for the cyber aesthetic; the HUD still shows coordinates when the cursor is over the map.
+- **Targets:** The API store is **in-memory**; restarting the API clears the registry unless you add a database later.
 
 ---
-*Generated by the LIRAN TULCHINSKI // 2026 Stable Build*
+
+*LIRAN TULCHINSKI — 2026*
