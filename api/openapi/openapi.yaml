@@ -1,0 +1,297 @@
+openapi: 3.1.0
+info:
+  title: Titan-V API
+  version: 1.0.0
+  description: |
+    Backend for the Titan-V geospatial terminal UI: protocols index, geocode proxy,
+    weather proxy, target registry, and health endpoints.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: Health
+  - name: System
+  - name: Protocols
+  - name: Geocode
+  - name: Weather
+  - name: Targets
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: titan-v-api
+  /api/v1/system/ping:
+    get:
+      tags: [System]
+      summary: Server time sync payload (for UI latency strip)
+      operationId: getSystemPing
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResponse"
+  /api/v1/protocols:
+    get:
+      tags: [Protocols]
+      summary: Terminal protocol index (mirrors UI autocomplete source)
+      operationId: listProtocols
+      responses:
+        "200":
+          description: Protocol list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [protocols]
+                properties:
+                  protocols:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Protocol"
+  /api/v1/geocode:
+    post:
+      tags: [Geocode]
+      summary: Forward geocode query via Nominatim (OSM)
+      operationId: postGeocode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GeocodeRequest"
+      responses:
+        "200":
+          description: Ranked hits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeocodeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+  /api/v1/weather:
+    get:
+      tags: [Weather]
+      summary: Current weather via Open-Meteo
+      operationId: getWeather
+      parameters:
+        - in: query
+          name: lat
+          required: true
+          schema:
+            type: number
+        - in: query
+          name: lon
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Open-Meteo-shaped payload for frontend compatibility
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+  /api/v1/targets:
+    get:
+      tags: [Targets]
+      summary: List coordinate registry entries
+      operationId: listTargets
+      responses:
+        "200":
+          description: Targets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [targets]
+                properties:
+                  targets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Target"
+    post:
+      tags: [Targets]
+      summary: Create a registry entry (after geocode on the client)
+      operationId: createTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTargetRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [target]
+                properties:
+                  target:
+                    $ref: "#/components/schemas/Target"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/targets/{id}:
+    delete:
+      tags: [Targets]
+      summary: Remove a registry entry
+      operationId: deleteTarget
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    BadGateway:
+      description: Upstream provider error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+  schemas:
+    ErrorBody:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    Protocol:
+      type: object
+      required: [cmd, info]
+      properties:
+        cmd:
+          type: string
+        info:
+          type: string
+    PingResponse:
+      type: object
+      required: [ok, serverTime, message]
+      properties:
+        ok:
+          type: boolean
+        serverTime:
+          type: string
+          format: date-time
+        message:
+          type: string
+    GeocodeRequest:
+      type: object
+      required: [q]
+      properties:
+        q:
+          type: string
+          description: Free-text location query
+    GeocodeHit:
+      type: object
+      required: [lat, lon, displayName]
+      properties:
+        lat:
+          type: number
+        lon:
+          type: number
+        displayName:
+          type: string
+    GeocodeResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeocodeHit"
+    WeatherResponse:
+      type: object
+      required: [current_weather]
+      properties:
+        current_weather:
+          $ref: "#/components/schemas/CurrentWeather"
+    CurrentWeather:
+      type: object
+      required: [temperature, windspeed, winddirection, weathercode, time]
+      properties:
+        temperature:
+          type: number
+        windspeed:
+          type: number
+        winddirection:
+          type: number
+        weathercode:
+          type: number
+        time:
+          type: string
+    Target:
+      type: object
+      required: [id, name, lat, lon, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        lat:
+          type: number
+        lon:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+    CreateTargetRequest:
+      type: object
+      required: [name, lat, lon]
+      properties:
+        name:
+          type: string
+        lat:
+          type: number
+        lon:
+          type: number
