@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": false,
+  "changelog-sections": [
+    { "type": "feat", "section": "Features", "hidden": false },
+    { "type": "fix", "section": "Bug Fixes", "hidden": false },
+    { "type": "helm", "section": "Helm / OpenShift", "hidden": false },
+    { "type": "chore", "section": "Miscellaneous", "hidden": true }
+  ],
+  "packages": {
+    "api": {
+      "component": "titan-v-api",
+      "release-type": "node",
+      "path": "api",
+      "changelog-path": "api/CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "yaml",
+          "path": "api/helm/titan-v-api/Chart.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "api/helm/titan-v-api/Chart.yaml",
+          "jsonpath": "$.appVersion"
+        }
+      ]
+    },
+    "app": {
+      "component": "titan-v-app",
+      "release-type": "node",
+      "path": "app",
+      "changelog-path": "app/CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "yaml",
+          "path": "app/helm/titan-v-app/Chart.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "app/helm/titan-v-app/Chart.yaml",
+          "jsonpath": "$.appVersion"
+        }
+      ]
+    }
+  }
+}

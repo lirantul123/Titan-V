@@ -1,0 +1,6 @@
+apiVersion: v2
+name: titan-v-app
+description: Titan-V React UI (Vite static build behind nginx) for OpenShift
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

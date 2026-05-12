@@ -1,0 +1,17 @@
+Titan-V API deployed.
+
+{{- if .Values.openshift.route.enabled }}
+OpenShift Route is enabled. Check route host:
+
+  oc get route {{ include "titan-v-api.fullname" . }} -o jsonpath='{.spec.host}{"\n"}'
+
+{{- else }}
+Port-forward for local testing:
+
+  kubectl port-forward svc/{{ include "titan-v-api.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+Health:
+
+  curl http://127.0.0.1:{{ .Values.service.port }}/health
+
+{{- end }}
