@@ -125,7 +125,20 @@
     </main>
 
     <script>
-        const PROTOCOLS = [
+        const API_BASE = (() => {
+            const fromQuery = new URLSearchParams(location.search).get('api');
+            if (fromQuery) {
+                try { localStorage.setItem('titan_v_api_base', fromQuery.replace(/\/$/, '')); } catch (e) {}
+                return fromQuery.replace(/\/$/, '');
+            }
+            try {
+                const saved = localStorage.getItem('titan_v_api_base');
+                if (saved) return saved.replace(/\/$/, '');
+            } catch (e) {}
+            return 'http://localhost:3000';
+        })();
+
+        let protocols = [
             { cmd: '\\SCAN', info: 'PING_ALL_NODES' },
             { cmd: '\\LOCATE [ID]', info: 'WARP TO TARGET (E.G. \\LOCATE 1)' },
             { cmd: '\\CLEAR', info: 'PURGE_TERMINAL_LOG' },
@@ -167,16 +180,24 @@
 
         async function fetchWeather(lat, lon) {
             try {
-                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+                const res = await fetch(`${API_BASE}/api/v1/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+                if (!res.ok) return null;
                 const data = await res.json();
                 return data.current_weather;
             } catch (e) { return null; }
         }
 
-        function removeNode(id, event) {
+        async function removeNode(id, event) {
             event.stopPropagation();
-            const index = targetData.findIndex(t => t.id === id);
-            if(index > -1) {
+            const index = targetData.findIndex(t => String(t.id) === String(id));
+            if (index > -1) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/v1/targets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                    if (!res.ok && res.status !== 404) throw new Error('DELETE_FAILED');
+                } catch (e) {
+                    writeLog('API_DELETE_FAILED', 'error');
+                    return;
+                }
                 map.removeLayer(markers[index]);
                 markers.splice(index, 1);
                 targetData.splice(index, 1);
@@ -198,7 +219,7 @@
                         <span class="text-cyan-500 font-black">[${i+1}]</span>
                         <span class="text-white font-bold">${node.name}</span>
                     </div>
-                    <button onclick="removeNode(${node.id}, event)" class="btn-delete font-black text-xs px-2">✕</button>
+                    <button onclick="removeNode('${node.id}', event)" class="btn-delete font-black text-xs px-2">✕</button>
                 `;
                 container.appendChild(item);
             });
@@ -206,20 +227,49 @@
 
         async function addTarget() {
             const q = document.getElementById('search-input').value;
-            if(!q) return;
+            if (!q) return;
             try {
-                const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
-                const data = await res.json();
-                if(data.length > 0) {
-                    const node = { id: Date.now(), name: data[0].display_name.split(',')[0].toUpperCase(), lat: data[0].lat, lon: data[0].lon };
-                    targetData.push(node);
-                    const marker = L.circleMarker([node.lat, node.lon], { radius: 8, color: '#00f3ff', fillOpacity: 0.4 }).addTo(map);
-                    markers.push(marker);
-                    renderList();
-                    writeLog(`LOCKED: ${node.name}`, 'cmd');
-                    document.getElementById('search-input').value = '';
+                const res = await fetch(`${API_BASE}/api/v1/geocode`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ q }),
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    writeLog(payload.message || 'GEOCODE_FAILED', 'error');
+                    return;
                 }
-            } catch(e) { writeLog("NET_ERROR", "error"); }
+                const hit = payload.results && payload.results[0];
+                if (!hit) {
+                    writeLog('NO_RESULTS', 'error');
+                    return;
+                }
+                const name = hit.displayName.split(',')[0].toUpperCase();
+                const createRes = await fetch(`${API_BASE}/api/v1/targets`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
+                });
+                const created = await createRes.json().catch(() => ({}));
+                if (!createRes.ok || !created.target) {
+                    writeLog(created.message || 'TARGET_CREATE_FAILED', 'error');
+                    return;
+                }
+                const node = {
+                    id: created.target.id,
+                    name: created.target.name,
+                    lat: created.target.lat,
+                    lon: created.target.lon,
+                };
+                targetData.push(node);
+                const marker = L.circleMarker([node.lat, node.lon], { radius: 8, color: '#00f3ff', fillOpacity: 0.4 }).addTo(map);
+                markers.push(marker);
+                renderList();
+                writeLog(`LOCKED: ${node.name}`, 'cmd');
+                document.getElementById('search-input').value = '';
+            } catch (e) {
+                writeLog('NET_ERROR', 'error');
+            }
         }
 
         function runProtocol(raw) {
@@ -256,7 +306,7 @@
             }
             else if(cmd === '\\HELP' || cmd === 'HELP') {
                 writeLog("--- TITAN_PROTOCOLS ---", "cmd");
-                PROTOCOLS.forEach(p => writeLog(`${p.cmd} >> ${p.info}`));
+                protocols.forEach(p => writeLog(`${p.cmd} >> ${p.info}`));
                 writeLog("FOR LOCATE: USE THE NUMBER IN BRACKETS NEXT TO THE TARGET NAME.");
             }
 
@@ -275,7 +325,7 @@
         input.addEventListener('input', (e) => {
             const val = e.target.value.toUpperCase();
             if(val.startsWith('\\')) {
-                const matches = PROTOCOLS.filter(p => p.cmd.startsWith(val));
+                const matches = protocols.filter(p => p.cmd.startsWith(val));
                 if(matches.length > 0) {
                     cmdDir.classList.add('active');
                     suggestList.innerHTML = matches.map(m => `
@@ -296,6 +346,58 @@
         setInterval(() => {
             document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-GB', { hour12: false });
         }, 1000);
+
+        async function syncFromApi() {
+            try {
+                const [pRes, tRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/v1/protocols`),
+                    fetch(`${API_BASE}/api/v1/targets`),
+                ]);
+                if (pRes.ok) {
+                    const pJson = await pRes.json();
+                    if (Array.isArray(pJson.protocols) && pJson.protocols.length) protocols = pJson.protocols;
+                }
+                if (tRes.ok) {
+                    const tJson = await tRes.json();
+                    const rows = Array.isArray(tJson.targets) ? tJson.targets : [];
+                    markers.forEach((m) => map.removeLayer(m));
+                    markers = [];
+                    targetData = [];
+                    rows.forEach((row) => {
+                        const node = {
+                            id: row.id,
+                            name: row.name,
+                            lat: Number(row.lat),
+                            lon: Number(row.lon),
+                        };
+                        targetData.push(node);
+                        markers.push(
+                            L.circleMarker([node.lat, node.lon], { radius: 8, color: '#00f3ff', fillOpacity: 0.4 }).addTo(map),
+                        );
+                    });
+                    renderList();
+                }
+                writeLog(`API_LINK: ${API_BASE}`, 'cmd');
+            } catch (e) {
+                writeLog('API_UNREACHABLE — START API: cd api && npm run dev', 'error');
+            }
+        }
+
+        async function refreshPing() {
+            const el = document.getElementById('ping');
+            const t0 = performance.now();
+            try {
+                const r = await fetch(`${API_BASE}/api/v1/system/ping`);
+                const ms = Math.round(performance.now() - t0);
+                el.innerText = r.ok ? `LATENCY: ${ms}MS` : 'LATENCY: ERR';
+            } catch (e) {
+                el.innerText = 'LATENCY: --';
+            }
+        }
+
+        syncFromApi();
+        refreshPing();
+        setInterval(refreshPing, 4000);
     </script>
 </body>
 </html>
