@@ -1,5 +1,2 @@
 .vscode
-
-/node_modules
-/api/node_modules
-/api/dist
+.DS_Store

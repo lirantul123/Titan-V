@@ -11,6 +11,7 @@
 - **Terminal:** Protocol autocomplete (`\`), command history (arrow up), and `\HELP` for the full index.
 - **Telemetry:** After `\LOCATE` or from `\WEATHER`, temperature and wind are loaded through the API (Open-Meteo on the server).
 - **API contract:** OpenAPI 3.1 spec, Swagger UI at `/docs`, JSON spec at `/openapi.json`.
+- **Frontend:** React 18 + TypeScript + Vite + Tailwind in `app/` (Leaflet remains imperative on a map container).
 
 ---
 
@@ -32,24 +33,33 @@ Default URL: **http://localhost:3000**
 
 Production-style run: `npm run build && npm start`
 
-### 2. Frontend (static `index.html`)
-
-Serve the **repository root** (where `index.html` lives), not only the `api/` folder:
+### 2. Frontend (`app/` — React + Vite)
 
 ```bash
-cd /path/to/Titan-V
-npx serve . -p 5173
+cd app
+npm install
+npm run dev
 ```
 
-Open **http://localhost:5173** (or the port your tool prints).
+Vite defaults to **http://localhost:5173**. The UI reads the API base from, in order:
 
-The UI defaults to `http://localhost:3000` as the API base. If the API runs elsewhere:
+1. `import.meta.env.VITE_API_BASE` (set in `app/.env`; see `app/.env.example`)
+2. `?api=http://host:port` on the Vite URL (also persisted as `titan_v_api_base` in `localStorage`)
+3. **`http://localhost:3000`**
 
-- One-time query (also saved to `localStorage` as `titan_v_api_base`):  
-  `http://localhost:5173/?api=http://127.0.0.1:3000`
-- Or set `titan_v_api_base` in the browser for your API origin (no trailing slash).
+So a typical dev setup is API on **3000** and Vite on **5173** with no extra config.
 
-Run **both** terminals (API + static server) for full behaviour (LOAD, delete, weather, ping, protocol sync).
+Preview the production bundle:
+
+```bash
+cd app
+npm run build
+npm run preview
+```
+
+The file **`index.html` at the repository root** is only a short pointer to the React app (for anyone opening the repo root in a browser). The real entry is **`app/index.html`** used by Vite.
+
+Run **both** `api` and `app` dev servers for full behaviour (LOAD, delete, weather, ping, protocol sync).
 
 ---
 
@@ -105,7 +115,7 @@ npm test
 
 | Layer | Technology |
 | :--- | :--- |
-| UI | HTML, Leaflet 1.9, Tailwind CDN, crosshair + glass layout |
+| UI | **React 18**, **TypeScript**, **Vite**, **Tailwind**, Leaflet 1.9 (map init in `app/src/App.tsx`) |
 | API | Node 20+, Express, TypeScript, CORS, Swagger UI, Vitest + Supertest |
 | Upstream | Nominatim (geocode), Open-Meteo (weather), public raster tile URLs in the browser |
 
@@ -119,4 +129,4 @@ npm test
 
 ---
 
-*LIRAN TULCHINSKI — 2026*
+*LIRAN TULCHINSKI — fucking 2026*

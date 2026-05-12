@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --neon-cyan: #00f3ff;
+  --alert-red: #ff3131;
+}
+
+body {
+  margin: 0;
+  background-color: #020203;
+  font-family: Inter, system-ui, sans-serif;
+  overflow: hidden;
+  color: #e0e0e0;
+  cursor: none;
+}
+
+.glass {
+  background: rgba(10, 12, 18, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 243, 255, 0.2);
+}
+
+.data-font {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.titan-map {
+  background: #000;
+  height: 100%;
+  width: 100%;
+  cursor: none !important;
+}
+
+.leaflet-container,
+.leaflet-interactive {
+  cursor: none !important;
+}
+
+.crosshair-v,
+.crosshair-h {
+  position: fixed;
+  background: var(--neon-cyan);
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.6;
+  box-shadow: 0 0 8px var(--neon-cyan);
+}
+
+.crosshair-v {
+  top: 0;
+  width: 1px;
+  height: 100%;
+}
+
+.crosshair-h {
+  left: 0;
+  height: 1px;
+  width: 100%;
+}
+
+.intel-card-inner {
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transform: translateX(130%);
+}
+
+.intel-card-inner.visible {
+  transform: translateX(0);
+}
+
+.target-item {
+  border-left: 2px solid transparent;
+  transition: all 0.3s;
+}
+
+.target-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cmd-directory {
+  display: none;
+}
+
+.cmd-directory.active {
+  display: block;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  width: 100%;
+  background: #080a0f;
+  border: 1px solid var(--neon-cyan);
+  z-index: 5000;
+  margin-bottom: 8px;
+}
+
+.btn-delete {
+  color: rgba(255, 255, 255, 0.2);
+  transition: all 0.2s;
+}
+
+.btn-delete:hover {
+  color: var(--alert-red);
+  transform: scale(1.2);
+}
+
+.mode-btn {
+  transition: all 0.3s;
+  border: 1px solid rgba(0, 243, 255, 0.1);
+}
+
+.mode-btn.active {
+  background: var(--neon-cyan);
+  color: #000;
+  font-weight: 900;
+  box-shadow: 0 0 15px var(--neon-cyan);
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--neon-cyan);
+}
