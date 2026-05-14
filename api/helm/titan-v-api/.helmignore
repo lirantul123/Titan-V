@@ -1,0 +1,3 @@
+# Patterns to skip packaging `helm template` / chart lint temp files
+*.tgz
+.helmignore.swp

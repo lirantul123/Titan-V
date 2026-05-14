@@ -1,0 +1,15 @@
+{
+  "name": "titan-v",
+  "private": true,
+  "description": "Root tooling: commitlint + husky (release-please runs in GitHub Actions)",
+  "scripts": {
+    "prepare": "husky || true",
+    "db:push": "npx --yes supabase@latest db push",
+    "db:link": "npx --yes supabase@latest link"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.6.0",
+    "@commitlint/config-conventional": "^19.6.0",
+    "husky": "^9.1.7"
+  }
+}

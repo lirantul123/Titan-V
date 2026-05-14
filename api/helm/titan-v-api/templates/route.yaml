@@ -1,0 +1,21 @@
+{{- if .Values.openshift.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "titan-v-api.fullname" . }}
+  labels:
+    {{- include "titan-v-api.labels" . | nindent 4 }}
+spec:
+  to:
+    kind: Service
+    name: {{ include "titan-v-api.fullname" . }}
+    weight: 100
+  port:
+    targetPort: http
+  {{- if .Values.openshift.route.host }}
+  host: {{ .Values.openshift.route.host }}
+  {{- end }}
+  tls:
+    termination: {{ .Values.openshift.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.openshift.route.tls.insecureEdgeTerminationPolicy }}
+{{- end }}

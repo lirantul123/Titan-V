@@ -109,6 +109,41 @@ cd api
 npm test
 ```
 
+### Helm (OpenShift / Kubernetes)
+
+Charts live next to each service:
+
+| Chart | Path |
+| :--- | :--- |
+| API | `api/helm/titan-v-api/` |
+| Web UI | `app/helm/titan-v-app/` |
+
+Examples:
+
+```bash
+helm template titan-api ./api/helm/titan-v-api --set openshift.route.enabled=true
+helm upgrade --install titan-web ./app/helm/titan-v-app -n your-namespace \
+  --set image.repository=quay.io/org/titan-v-app --set image.tag=1.0.0 \
+  --set openshift.route.enabled=true
+```
+
+- **API** chart: `Deployment`, `Service`, optional **OpenShift `Route`**, probes on `/health`. Build the runtime image with `api/Containerfile` (expects `npm run build` in the image build stage).
+- **App** chart: nginx (default `nginxinc/nginx-unprivileged`) with a `ConfigMap` server block on port **8080**, optional **Route**. Build with `app/Containerfile` (multi-stage Vite → static files).
+
+Set `image.repository` / `image.tag` to your registry (for example OpenShift internal registry or Quay).
+
+### Releases & commits
+
+- **commitlint** (root `commitlint.config.mjs` + `.husky/commit-msg` + `.github/workflows/commitlint.yml`) validates conventional commits on pull requests. Types include **`feat`**, **`fix`**, **`helm`**, and the usual **`chore`**, **`docs`**, etc.
+- **release-please** (`.github/workflows/release-please.yml`, `release-please-config.json`, `.release-please-manifest.json`) bumps **`api`** and **`app`** `package.json` versions and syncs **`api/helm/titan-v-api/Chart.yaml`** and **`app/helm/titan-v-app/Chart.yaml`** (`version` / `appVersion`).
+- The workflow runs on pushes to **`main`** only when the pushed commits include **`feat:`**, **`fix:`**, or **`helm:`** (or a **`chore: release`** merge from release-please). See **`CONTRIBUTING.md`**.
+
+Root dev install (optional, for local hooks):
+
+```bash
+npm install
+```
+
 ---
 
 ## Technical stack

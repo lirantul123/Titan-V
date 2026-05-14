@@ -1,5 +1,7 @@
 import L from "leaflet";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AuthPanel } from "./components/AuthPanel";
+import { useAuth } from "./context/AuthContext";
 import { getApiBase } from "./lib/apiBase";
 import { DEFAULT_PROTOCOLS } from "./lib/defaultProtocols";
 import { createBaseLayers, resolveMapModeKey, type MapModeKey } from "./lib/mapModes";
@@ -10,6 +12,12 @@ function timeLabel(): string {
 }
 
 export default function App() {
+  const { apiFetch, authReady, supabaseEnabled, session } = useAuth();
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const sessionAccessTokenRef = useRef<string | undefined>(undefined);
+  sessionAccessTokenRef.current = session?.access_token;
+
   const apiBase = useRef(getApiBase());
   const mapElRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -78,13 +86,13 @@ export default function App() {
   const refreshPing = useCallback(async () => {
     const t0 = performance.now();
     try {
-      const r = await fetch(`${apiBase.current}/api/v1/system/ping`);
+      const r = await apiFetch(`${apiBase.current}/api/v1/system/ping`);
       const ms = Math.round(performance.now() - t0);
       setPing(r.ok ? `LATENCY: ${ms}MS` : "LATENCY: ERR");
     } catch {
       setPing("LATENCY: --");
     }
-  }, []);
+  }, [apiFetch]);
 
   useEffect(() => {
     void refreshPing();
@@ -162,7 +170,7 @@ export default function App() {
 
   const fetchWeather = useCallback(async (lat: number, lon: number) => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBase.current}/api/v1/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
       );
       if (!res.ok) return null;
@@ -171,22 +179,28 @@ export default function App() {
     } catch {
       return null;
     }
-  }, []);
+  }, [apiFetch]);
 
   const syncFromApi = useCallback(
     async (opts: { quiet?: boolean } = {}) => {
+      const accessTokenAtStart = sessionAccessTokenRef.current;
       try {
         const [pRes, tRes] = await Promise.all([
-          fetch(`${apiBase.current}/api/v1/protocols`),
-          fetch(`${apiBase.current}/api/v1/targets`),
+          apiFetch(`${apiBase.current}/api/v1/protocols`),
+          apiFetch(`${apiBase.current}/api/v1/targets`),
         ]);
+        if (sessionAccessTokenRef.current !== accessTokenAtStart) return;
+
         if (pRes.ok) {
           const pJson = (await pRes.json()) as { protocols?: Protocol[] };
           if (Array.isArray(pJson.protocols) && pJson.protocols.length) setProtocols(pJson.protocols);
         }
+        if (sessionAccessTokenRef.current !== accessTokenAtStart) return;
+
         if (tRes.ok) {
           const tJson = (await tRes.json()) as { targets?: Target[] };
           const rows = Array.isArray(tJson.targets) ? tJson.targets : [];
+          if (sessionAccessTokenRef.current !== accessTokenAtStart) return;
           setTargets(
             rows.map((row) => ({
               id: row.id,
@@ -195,24 +209,38 @@ export default function App() {
               lon: Number(row.lon),
             })),
           );
+        } else if (tRes.status === 401) {
+          if (sessionAccessTokenRef.current !== accessTokenAtStart) return;
+          setTargets([]);
+          if (supabaseEnabled && !sessionRef.current) {
+            writeLog("REGISTRY_LOCKED — sign in (sidebar), then \\SYNC.", "error");
+          } else {
+            writeLog("REGISTRY: 401 UNAUTHORIZED (API expects a valid Supabase session).", "error");
+          }
+        } else if (tRes.status === 503) {
+          if (sessionAccessTokenRef.current !== accessTokenAtStart) return;
+          setTargets([]);
+          writeLog("REGISTRY: API missing Supabase env — areas are not per-user until the API is configured.", "error");
         }
         if (!opts.quiet) writeLog(`API_LINK: ${apiBase.current}`, "cmd");
       } catch {
         writeLog("API_UNREACHABLE — START API: cd api && npm run dev", "error");
       }
     },
-    [writeLog],
+    [writeLog, apiFetch, supabaseEnabled],
   );
 
   useEffect(() => {
+    if (!authReady) return;
+    setTargets([]);
     void syncFromApi();
-  }, [syncFromApi]);
+  }, [authReady, syncFromApi, session?.access_token]);
 
   const addTarget = useCallback(async () => {
     const q = searchQuery.trim();
     if (!q) return;
     try {
-      const res = await fetch(`${apiBase.current}/api/v1/geocode`, {
+      const res = await apiFetch(`${apiBase.current}/api/v1/geocode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ q }),
@@ -228,7 +256,7 @@ export default function App() {
         return;
       }
       const name = hit.displayName.split(",")[0].toUpperCase();
-      const createRes = await fetch(`${apiBase.current}/api/v1/targets`, {
+      const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
@@ -250,14 +278,14 @@ export default function App() {
     } catch {
       writeLog("NET_ERROR", "error");
     }
-  }, [searchQuery, writeLog]);
+  }, [searchQuery, writeLog, apiFetch]);
 
   const removeNode = useCallback(
     async (id: string) => {
       const index = targetsRef.current.findIndex((t) => String(t.id) === String(id));
       if (index < 0) return;
       try {
-        const res = await fetch(`${apiBase.current}/api/v1/targets/${encodeURIComponent(id)}`, {
+        const res = await apiFetch(`${apiBase.current}/api/v1/targets/${encodeURIComponent(id)}`, {
           method: "DELETE",
         });
         if (!res.ok && res.status !== 404) throw new Error("delete");
@@ -269,7 +297,7 @@ export default function App() {
       writeLog("NODE_REMOVED", "error");
       setIntelVisible(false);
     },
-    [writeLog],
+    [writeLog, apiFetch],
   );
 
   const runProtocol = useCallback(
@@ -299,7 +327,7 @@ export default function App() {
       } else if (cmd === "\\SCAN" || cmd === "SCAN") {
         writeLog("INIT_SCAN...", "cmd");
         try {
-          const r = await fetch(`${apiBase.current}/api/v1/targets`);
+          const r = await apiFetch(`${apiBase.current}/api/v1/targets`);
           if (!r.ok) throw new Error("http");
           const j = (await r.json()) as { targets?: Target[] };
           const list = Array.isArray(j.targets) ? j.targets : [];
@@ -336,7 +364,7 @@ export default function App() {
         if (!rest) writeLog("ADD_USAGE: \\ADD <LOCATION_QUERY>", "error");
         else {
           try {
-            const res = await fetch(`${apiBase.current}/api/v1/geocode`, {
+            const res = await apiFetch(`${apiBase.current}/api/v1/geocode`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ q: rest }),
@@ -351,7 +379,7 @@ export default function App() {
               if (!hit) writeLog("NO_RESULTS", "error");
               else {
                 const name = hit.displayName.split(",")[0].toUpperCase();
-                const createRes = await fetch(`${apiBase.current}/api/v1/targets`, {
+                const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
@@ -378,7 +406,7 @@ export default function App() {
         if (!rest) writeLog("GEOCODE_USAGE: \\GEOCODE <LOCATION_QUERY>", "error");
         else {
           try {
-            const res = await fetch(`${apiBase.current}/api/v1/geocode`, {
+            const res = await apiFetch(`${apiBase.current}/api/v1/geocode`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ q: rest }),
@@ -407,7 +435,7 @@ export default function App() {
       } else if (cmd === "\\PING" || cmd === "PING") {
         const t0 = performance.now();
         try {
-          const r = await fetch(`${apiBase.current}/api/v1/system/ping`);
+          const r = await apiFetch(`${apiBase.current}/api/v1/system/ping`);
           const ms = Math.round(performance.now() - t0);
           if (r.ok) {
             const j = (await r.json().catch(() => ({}))) as { serverTime?: string };
@@ -418,7 +446,7 @@ export default function App() {
         }
       } else if (cmd === "\\HEALTH" || cmd === "HEALTH") {
         try {
-          const r = await fetch(`${apiBase.current}/health`);
+          const r = await apiFetch(`${apiBase.current}/health`);
           const j = (await r.json().catch(() => ({}))) as { status?: string; service?: string };
           if (r.ok) writeLog(`HEALTH: ${j.status} // ${j.service}`, "cmd");
           else writeLog("HEALTH_HTTP_ERR", "error");
@@ -444,7 +472,7 @@ export default function App() {
 
       setTerminalInput("");
     },
-    [writeLog, fetchWeather, setMode, syncFromApi],
+    [writeLog, fetchWeather, setMode, syncFromApi, apiFetch, supabaseEnabled, session],
   );
 
   const modeKeys: MapModeKey[] = ["dark", "light", "sat", "topo", "voyager"];
@@ -464,41 +492,44 @@ export default function App() {
   const showCmdPalette = terminalInput.startsWith("\\") && suggestions.length > 0;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="titan-safe box-border flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-stretch lg:items-center lg:justify-center">
       <div className="crosshair-v" style={{ left: cross.x }} />
       <div className="crosshair-h" style={{ top: cross.y }} />
 
-      <main className="flex h-[96vh] w-full max-w-[1850px] flex-col gap-4">
-        <header className="glass flex items-center justify-between rounded-lg border-cyan-500/20 px-8 py-4">
-          <div className="flex flex-wrap items-center gap-8 lg:gap-12">
+      <main className="flex min-h-0 w-full max-w-[1850px] flex-1 flex-col gap-3 max-lg:pb-4 lg:mx-auto lg:h-[min(96vh,calc(100dvh-2rem))] lg:max-h-[min(96vh,calc(100dvh-2rem))] lg:flex-none lg:overflow-hidden">
+        <header className="glass flex flex-wrap items-center justify-between gap-4 rounded-lg border-cyan-500/20 px-6 py-4 lg:px-8">
+          <div className="flex flex-wrap items-center gap-6 lg:gap-12">
             <div>
               <h1 className="text-3xl font-black uppercase italic leading-none tracking-tighter text-white">Titan-V</h1>
               <span className="data-font text-[9px] font-bold tracking-[0.4em] text-cyan-400">MULTI_MODE_MAP</span>
             </div>
-            <div className="flex max-w-[520px] flex-wrap justify-end gap-1.5">
+            <div className="flex max-w-[520px] flex-wrap justify-end gap-1.5 max-lg:max-w-none max-lg:gap-2">
               {modeKeys.map((m) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setMode(m)}
-                  className={`mode-btn rounded px-3 py-1 data-font text-[9px] ${mapMode === m ? "active" : ""}`}
+                  className={`mode-btn rounded px-3 py-2 data-font text-[9px] max-lg:min-h-[44px] max-lg:min-w-[44px] max-lg:px-3 max-lg:py-2 lg:py-1 ${mapMode === m ? "active" : ""}`}
                 >
                   {modeLabels[m]}
                 </button>
               ))}
             </div>
           </div>
-          <div className="text-right">
+          <div className="shrink-0 text-right">
             <p className="data-font text-xl font-bold text-white">{clock}</p>
             <span className="data-font text-[9px] font-black text-cyan-500">{ping}</span>
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-grow grid-cols-12 gap-4 overflow-hidden">
-          <div className="glass col-span-3 flex flex-col overflow-hidden rounded-lg p-6">
-            <h3 className="mb-6 text-[10px] font-black uppercase tracking-widest text-cyan-500 underline decoration-cyan-500/30 underline-offset-8">
+        <div className="grid min-h-0 flex-grow grid-cols-1 gap-4 max-lg:min-h-0 max-lg:overflow-visible lg:grid-cols-12 lg:overflow-hidden">
+          <div className="glass flex min-h-0 flex-col overflow-visible rounded-lg p-6 max-lg:min-h-0 lg:col-span-3 lg:overflow-hidden">
+            <h3 className="mb-3 text-[10px] font-black uppercase tracking-widest text-cyan-500 underline decoration-cyan-500/30 underline-offset-8">
               Coordinate_Registry
             </h3>
+            <div className="mb-5 shrink-0 rounded border border-cyan-500/25 bg-black/40 p-4">
+              <AuthPanel areaCount={targets.length} protocolCount={protocols.length} />
+            </div>
             <div className="mb-6 flex gap-2">
               <input
                 type="text"
@@ -546,7 +577,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="glass relative col-span-6 flex min-h-0 min-h-[300px] flex-col overflow-hidden rounded-lg border-none">
+          <div className="glass relative flex min-h-[50vh] flex-col overflow-hidden rounded-lg border-none lg:col-span-6 lg:min-h-0">
             <div ref={mapElRef} className="titan-map min-h-0 flex-1" />
 
             <div
@@ -578,7 +609,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="glass col-span-3 flex flex-col overflow-hidden rounded-lg">
+          <div className="glass flex min-h-0 flex-col overflow-hidden rounded-lg lg:col-span-3">
             <div className="data-font flex-grow space-y-4 overflow-y-auto p-6 text-[11px] text-white/50">
               {logLines.map((line) => (
                 <div

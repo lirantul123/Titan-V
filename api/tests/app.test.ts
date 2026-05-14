@@ -84,6 +84,17 @@ describe("Titan-V API", () => {
     expect(res.body.current_weather.temperature).toBe(12);
   });
 
+  it("GET /api/v1/targets with Bearer returns 503 when API has no Supabase keys", async () => {
+    vi.stubEnv("SUPABASE_URL", "");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
+    try {
+      const res = await request(app).get("/api/v1/targets").set("Authorization", "Bearer fake.jwt.token").expect(503);
+      expect(res.body.error).toBe("API_NOT_CONFIGURED_FOR_AUTH");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("CRUD /api/v1/targets", async () => {
     const empty = await request(app).get("/api/v1/targets").expect(200);
     expect(empty.body.targets).toEqual([]);
