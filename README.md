@@ -61,6 +61,42 @@ The file **`index.html` at the repository root** is only a short pointer to the 
 
 Run **both** `api` and `app` dev servers for full behaviour (LOAD, delete, weather, ping, protocol sync).
 
+### Auth first (login / register before the map)
+
+If **`VITE_SUPABASE_URL`** and **`VITE_SUPABASE_ANON_KEY`** are set in `app/.env`, opening the app at **`#/`** sends you to **`#/login`** until you are signed in. After a successful session, **`#/`** loads the map. With no Supabase env vars, the map loads immediately (local / demo). The login screen is **email + password** only (register and sign in).
+
+Add your production URL under **Supabase → Authentication → URL configuration**. For **register without a confirmation email**, turn off **Confirm email** (or equivalent) on the **Email** provider — the app cannot disable that from code. See **`supabase/README.md`**.
+
+### Phone / iPhone layout
+
+The UI uses **`viewport-fit=cover`**, **safe-area** padding (`.titan-safe`), and touch rules in **`app/src/index.css`**: on phones, crosshairs are hidden, the system cursor returns, and the map uses **grab / grabbing** cursors for panning. You can **Add to Home Screen** from Safari; optional PWA manifest is not included yet.
+
+### Deploying the web app (`app/`)
+
+1. **Build** (Vite bakes `VITE_*` into the bundle at **build time**):
+
+   ```bash
+   cd app
+   export VITE_API_BASE="https://your-api.example"   # optional; default is localhost in dev only
+   export VITE_SUPABASE_URL="https://xxxx.supabase.co"
+   export VITE_SUPABASE_ANON_KEY="sb_publishable_…"
+   npm ci && npm run build
+   ```
+
+   Serve the **`app/dist/`** folder from any static host (nginx, S3+CloudFront, GitHub Pages, etc.). All routes are under **`#/`** (hash router), so the server only needs to serve **`index.html`** for the app root—no special SPA rewrite for `/login`.
+
+2. **Docker** (see **`app/Containerfile`**):
+
+   ```bash
+   docker build -f app/Containerfile ./app \
+     --build-arg VITE_API_BASE=https://your-api.example \
+     --build-arg VITE_SUPABASE_URL=https://xxxx.supabase.co \
+     --build-arg VITE_SUPABASE_ANON_KEY=sb_publishable_xxx \
+     -t your-registry/titan-v-app:1.0.0
+   ```
+
+3. **Kubernetes / OpenShift** — chart **`app/helm/titan-v-app/`**: build and push the image, then `helm upgrade --install` with your `image.repository` / `image.tag` (see table earlier in this README). Inject API URL and Supabase **publishable** key at **image build time** as above; the chart’s `env:` keys do not change a static Vite bundle unless you add a runtime config layer.
+
 ---
 
 ## Command protocols
