@@ -113,6 +113,14 @@ describe("Titan-V API", () => {
     expect(after.body.targets).toEqual([]);
   });
 
+  it("POST /api/v1/targets rejects duplicate name or coordinates", async () => {
+    await request(app).post("/api/v1/targets").send({ name: "NODE_A", lat: 1, lon: 2 }).expect(201);
+    const byName = await request(app).post("/api/v1/targets").send({ name: "NODE_A", lat: 9, lon: 9 }).expect(409);
+    expect(byName.body.error).toBe("DUPLICATE_TARGET");
+    const byCoord = await request(app).post("/api/v1/targets").send({ name: "NODE_B", lat: 1, lon: 2 }).expect(409);
+    expect(byCoord.body.error).toBe("DUPLICATE_TARGET");
+  });
+
   it("GET /openapi.json serves spec", async () => {
     const res = await request(app).get("/openapi.json").expect(200);
     expect(res.body.openapi).toBe("3.1.0");

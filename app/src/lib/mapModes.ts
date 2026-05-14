@@ -1,4 +1,4 @@
-import L from "leaflet";
+import type { TileLayer } from "leaflet";
 
 export type MapModeKey = "dark" | "light" | "sat" | "topo" | "voyager";
 
@@ -23,7 +23,7 @@ export function resolveMapModeKey(token: string): MapModeKey | null {
   return MAP_MODE_ALIASES[k] ?? null;
 }
 
-export function createBaseLayers(): Record<MapModeKey, L.TileLayer> {
+export function createBaseLayers(L: typeof import("leaflet")): Record<MapModeKey, TileLayer> {
   return {
     dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
       subdomains: "abcd",

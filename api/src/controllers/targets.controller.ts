@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { findDuplicateTarget } from "../lib/targetDedupe.js";
 import { isSupabaseConfigured } from "../lib/supabaseAdmin.js";
 import {
   deleteAreaForUser,
@@ -48,8 +49,25 @@ export async function postTarget(req: Request, res: Response): Promise<void> {
       res.status(401).json({ error: "UNAUTHORIZED", message: "Missing auth context" });
       return;
     }
+    const existing = await listAreasForUser(internalId);
+    if (findDuplicateTarget(existing, name, lat, lon)) {
+      res.status(409).json({
+        error: "DUPLICATE_TARGET",
+        message: "That place is already in your registry (same label or coordinates).",
+      });
+      return;
+    }
     const target = await insertArea(internalId, { name, lat, lon });
     res.status(201).json({ target: toTargetPayload(target) });
+    return;
+  }
+
+  const existing = listTargets();
+  if (findDuplicateTarget(existing, name, lat, lon)) {
+    res.status(409).json({
+      error: "DUPLICATE_TARGET",
+      message: "That place is already in your registry (same label or coordinates).",
+    });
     return;
   }
 

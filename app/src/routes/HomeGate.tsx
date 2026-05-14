@@ -1,6 +1,8 @@
+import { lazy, Suspense } from "react";
 import { Navigate } from "react-router-dom";
-import App from "../App";
 import { useAuth } from "../context/AuthContext";
+
+const App = lazy(() => import("../App"));
 
 /**
  * When Supabase is configured in the browser, unauthenticated users are sent to `/login` first.
@@ -21,5 +23,15 @@ export function HomeGate() {
     return <Navigate to="/login" replace />;
   }
 
-  return <App />;
+  return (
+    <Suspense
+      fallback={
+        <div className="titan-safe flex min-h-[100dvh] items-center justify-center bg-[#020203]">
+          <p className="data-font text-sm text-white/40">Loading map…</p>
+        </div>
+      }
+    >
+      <App />
+    </Suspense>
+  );
 }

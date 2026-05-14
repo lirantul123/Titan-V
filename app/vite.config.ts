@@ -6,4 +6,15 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/leaflet")) return "leaflet";
+          if (id.includes("node_modules/@supabase")) return "supabase";
+        },
+      },
+    },
+    chunkSizeWarningLimit: 700,
+  },
 });

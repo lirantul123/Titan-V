@@ -50,9 +50,16 @@ export function AuthPanel({ areaCount, protocolCount }: AuthPanelProps) {
         <button
           type="button"
           onClick={() => void signOut()}
-          className="mode-btn w-full rounded py-2.5 data-font text-[10px] font-black uppercase tracking-widest text-cyan-400"
+          className="group relative w-full overflow-hidden rounded-md border border-white/10 bg-white/[0.04] py-2.5 text-center data-font text-[10px] font-black uppercase tracking-[0.2em] text-white/80 shadow-sm transition-all duration-200 hover:border-red-400/35 hover:bg-red-500/10 hover:text-red-200 hover:shadow-[0_0_20px_rgba(255,49,49,0.12)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-500/60 active:scale-[0.98]"
         >
-          Sign out
+          <span className="relative z-10">Sign out</span>
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+            style={{
+              background: "linear-gradient(90deg, transparent, rgba(255,49,49,0.08), transparent)",
+            }}
+          />
         </button>
       </div>
     );
@@ -62,7 +69,7 @@ export function AuthPanel({ areaCount, protocolCount }: AuthPanelProps) {
     <div className="flex flex-col gap-2">
       <Link
         to="/login"
-        className="mode-btn inline-flex w-full items-center justify-center rounded py-2.5 data-font text-[10px] font-black uppercase tracking-widest text-cyan-400"
+        className="group inline-flex w-full items-center justify-center rounded-md border border-cyan-500/25 bg-cyan-500/[0.06] py-2.5 text-center data-font text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300 shadow-sm transition-all duration-200 hover:border-cyan-400/55 hover:bg-cyan-500/15 hover:text-white hover:shadow-[0_0_22px_rgba(0,243,255,0.18)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-500/70 active:scale-[0.98]"
       >
         Sign in
       </Link>

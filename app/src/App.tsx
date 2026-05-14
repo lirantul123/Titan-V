@@ -1,14 +1,39 @@
-import L from "leaflet";
-import { useCallback, useEffect, useRef, useState } from "react";
+import type { CircleMarker, Map as LeafletMap } from "leaflet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthPanel } from "./components/AuthPanel";
 import { useAuth } from "./context/AuthContext";
 import { getApiBase } from "./lib/apiBase";
 import { DEFAULT_PROTOCOLS } from "./lib/defaultProtocols";
 import { createBaseLayers, resolveMapModeKey, type MapModeKey } from "./lib/mapModes";
+import { findDuplicateTarget } from "./lib/targetDedupe";
 import type { LogLine, LogStatus, Protocol, Target } from "./lib/types";
 
 function timeLabel(): string {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+
+const MAX_LOG_LINES = 400;
+
+/** Normalize command text so palette matches whether API sends `\MODE` or `MODE`. */
+function protocolPaletteKey(cmd: string): string {
+  const t = cmd.trim().toUpperCase();
+  return t.startsWith("\\") ? t : `\\${t}`;
+}
+
+/** True if this code point starts a slash-command (ASCII \\, /, fullwidth \\). */
+function isCommandLeaderCodePoint(cp: number | undefined): cp is number {
+  if (cp === undefined) return false;
+  return cp === 0x5c || cp === 0x2f || cp === 0xff3c;
+}
+
+/** Normalize whether the user started a command; builds match prefix for filtering. */
+function stripCommandLeader(raw: string): { active: boolean; matchPrefix: string } {
+  const t = raw.trimStart();
+  const c0 = t.codePointAt(0);
+  if (!isCommandLeaderCodePoint(c0)) return { active: false, matchPrefix: "" };
+  const leaderLen = c0 > 0xffff ? 2 : 1;
+  const rest = t.slice(leaderLen).toUpperCase();
+  return { active: true, matchPrefix: `\\${rest}` };
 }
 
 export default function App() {
@@ -20,9 +45,10 @@ export default function App() {
 
   const apiBase = useRef(getApiBase());
   const mapElRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const leafletLibRef = useRef<typeof import("leaflet") | null>(null);
   const layersRef = useRef<ReturnType<typeof createBaseLayers> | null>(null);
-  const markersRef = useRef<L.CircleMarker[]>([]);
+  const markersRef = useRef<CircleMarker[]>([]);
 
   const [mapReady, setMapReady] = useState(false);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -47,6 +73,8 @@ export default function App() {
     { id: "boot", time: timeLabel(), text: ">> SYSTEM_READY", status: "cmd" },
   ]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const logScrollRef = useRef<HTMLDivElement>(null);
+  const prevPaletteOpenRef = useRef(false);
 
   const [intelVisible, setIntelVisible] = useState(false);
   const [intelName, setIntelName] = useState("---");
@@ -62,18 +90,34 @@ export default function App() {
   const [terminalInput, setTerminalInput] = useState("");
   const [cmdHistory, setCmdHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const historyDraftRef = useRef("");
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suppressCmdPalette, setSuppressCmdPalette] = useState(false);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("titan_v_terminal_collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const [cross, setCross] = useState({ x: 0, y: 0 });
 
   const writeLog = useCallback((text: string, status: LogStatus = "default") => {
-    setLogLines((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), time: timeLabel(), text, status },
-    ]);
+    setLogLines((prev) => {
+      const next = [...prev, { id: crypto.randomUUID(), time: timeLabel(), text, status }];
+      return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
+    });
   }, []);
 
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const scrollEl = logScrollRef.current;
+    if (!scrollEl) return;
+    const distanceFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    if (distanceFromBottom > 120) return;
+    requestAnimationFrame(() => {
+      logEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
   }, [logLines]);
 
   useEffect(() => {
@@ -82,6 +126,22 @@ export default function App() {
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("titan_v_terminal_collapsed", terminalCollapsed ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [terminalCollapsed]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const id = window.setTimeout(() => {
+      mapRef.current?.invalidateSize({ animate: false });
+    }, 100);
+    return () => window.clearTimeout(id);
+  }, [terminalCollapsed, mapReady]);
 
   const refreshPing = useCallback(async () => {
     const t0 = performance.now();
@@ -101,32 +161,60 @@ export default function App() {
   }, [refreshPing]);
 
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      setCross({ x: e.clientX, y: e.clientY });
+    const pending = { x: 0, y: 0 };
+    let raf = 0;
+    const flush = () => {
+      raf = 0;
       const el = mapElRef.current;
-      if (!el || !mapRef.current) return;
+      const map = mapRef.current;
+      const L = leafletLibRef.current;
+      setCross({ x: pending.x, y: pending.y });
+      if (!el || !map || !L) return;
       const r = el.getBoundingClientRect();
-      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-        const ll = mapRef.current.mouseEventToLatLng(e);
+      if (pending.x >= r.left && pending.x <= r.right && pending.y >= r.top && pending.y <= r.bottom) {
+        const x = pending.x - r.left;
+        const y = pending.y - r.top;
+        const ll = map.containerPointToLatLng(L.point(x, y));
         setCoordHud(`${ll.lat.toFixed(4)} | ${ll.lng.toFixed(4)}`);
       }
     };
+    const onMove = (e: MouseEvent) => {
+      pending.x = e.clientX;
+      pending.y = e.clientY;
+      if (!raf) raf = requestAnimationFrame(flush);
+    };
     window.addEventListener("mousemove", onMove);
-    return () => window.removeEventListener("mousemove", onMove);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, [mapReady]);
 
   useEffect(() => {
     if (!mapElRef.current || mapRef.current) return;
-    const map = L.map(mapElRef.current, { zoomControl: false, attributionControl: false }).setView([20, 0], 2);
-    const layers = createBaseLayers();
-    layersRef.current = layers;
-    mapRef.current = map;
-    layers.dark.addTo(map);
-    setMapReady(true);
+    let cancelled = false;
+    let map: LeafletMap | null = null;
+
+    void (async () => {
+      await import("leaflet/dist/leaflet.css");
+      const raw = await import("leaflet");
+      const Leaflet = ((raw as unknown as { default?: typeof import("leaflet") }).default ?? raw) as typeof import("leaflet");
+      if (cancelled || !mapElRef.current) return;
+      leafletLibRef.current = Leaflet;
+      map = Leaflet.map(mapElRef.current, { zoomControl: false, attributionControl: false }).setView([20, 0], 2);
+      const layers = createBaseLayers(Leaflet);
+      layersRef.current = layers;
+      mapRef.current = map;
+      layers.dark.addTo(map);
+      setMapReady(true);
+    })();
+
     return () => {
-      map.remove();
+      cancelled = true;
+      map?.remove();
       mapRef.current = null;
       layersRef.current = null;
+      leafletLibRef.current = null;
       markersRef.current = [];
       setMapReady(false);
     };
@@ -144,7 +232,8 @@ export default function App() {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const L = leafletLibRef.current;
+    if (!map || !L) return;
     markersRef.current.forEach((m) => map.removeLayer(m));
     markersRef.current = targets.map((t) =>
       L.circleMarker([t.lat, t.lon], { radius: 8, color: "#00f3ff", fillOpacity: 0.4 }).addTo(map),
@@ -256,12 +345,20 @@ export default function App() {
         return;
       }
       const name = hit.displayName.split(",")[0].toUpperCase();
+      if (findDuplicateTarget(targetsRef.current, name, hit.lat, hit.lon)) {
+        writeLog("DUPLICATE — ALREADY_IN_REGISTRY (SAME LABEL OR COORDS)", "error");
+        return;
+      }
       const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
       });
-      const created = (await createRes.json().catch(() => ({}))) as { message?: string; target?: Target };
+      const created = (await createRes.json().catch(() => ({}))) as { message?: string; target?: Target; error?: string };
+      if (createRes.status === 409) {
+        writeLog(created.message || "DUPLICATE — ALREADY_IN_REGISTRY", "error");
+        return;
+      }
       if (!createRes.ok || !created.target) {
         writeLog(created.message || "TARGET_CREATE_FAILED", "error");
         return;
@@ -311,6 +408,9 @@ export default function App() {
 
       setCmdHistory((h) => [raw, ...h]);
       setHistoryIndex(-1);
+      historyDraftRef.current = "";
+      setSuppressCmdPalette(false);
+      setSuggestionIndex(0);
 
       if (cmd === "\\MODE" || cmd === "MODE") {
         const token = parts
@@ -379,22 +479,31 @@ export default function App() {
               if (!hit) writeLog("NO_RESULTS", "error");
               else {
                 const name = hit.displayName.split(",")[0].toUpperCase();
-                const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
-                });
-                const created = (await createRes.json().catch(() => ({}))) as { message?: string; target?: Target };
-                if (!createRes.ok || !created.target) writeLog(created.message || "TARGET_CREATE_FAILED", "error");
-                else {
-                  const node: Target = {
-                    id: created.target.id,
-                    name: created.target.name,
-                    lat: created.target.lat,
-                    lon: created.target.lon,
+                if (findDuplicateTarget(targetsRef.current, name, hit.lat, hit.lon)) {
+                  writeLog("DUPLICATE — ALREADY_IN_REGISTRY (SAME LABEL OR COORDS)", "error");
+                } else {
+                  const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
+                  });
+                  const created = (await createRes.json().catch(() => ({}))) as {
+                    message?: string;
+                    target?: Target;
+                    error?: string;
                   };
-                  setTargets((prev) => [...prev, node]);
-                  writeLog(`LOCKED_VIA_CMD: ${node.name}`, "cmd");
+                  if (createRes.status === 409) writeLog(created.message || "DUPLICATE — ALREADY_IN_REGISTRY", "error");
+                  else if (!createRes.ok || !created.target) writeLog(created.message || "TARGET_CREATE_FAILED", "error");
+                  else {
+                    const node: Target = {
+                      id: created.target.id,
+                      name: created.target.name,
+                      lat: created.target.lat,
+                      lon: created.target.lon,
+                    };
+                    setTargets((prev) => [...prev, node]);
+                    writeLog(`LOCKED_VIA_CMD: ${node.name}`, "cmd");
+                  }
                 }
               }
             }
@@ -466,13 +575,14 @@ export default function App() {
         writeLog("--- TITAN_PROTOCOLS ---", "cmd");
         protocolsRef.current.forEach((p) => writeLog(`${p.cmd} >> ${p.info}`));
         writeLog("ARGS: USE SPACE AFTER COMMAND (E.G. \\ADD LONDON). \\LOCATE USES LIST INDEX.", "default");
+        writeLog("TERMINAL: ↑↓ HISTORY | ↑↓ IN MENU (WHEN OPEN) | TAB COMPLETE | ESC CLOSE MENU", "default");
       } else {
         writeLog(`UNKNOWN_CMD: ${cmd}`, "error");
       }
 
       setTerminalInput("");
     },
-    [writeLog, fetchWeather, setMode, syncFromApi, apiFetch, supabaseEnabled, session],
+    [writeLog, fetchWeather, setMode, syncFromApi, apiFetch],
   );
 
   const modeKeys: MapModeKey[] = ["dark", "light", "sat", "topo", "voyager"];
@@ -484,19 +594,31 @@ export default function App() {
     voyager: "VECTOR",
   };
 
-  const suggestions =
-    terminalInput.toUpperCase().startsWith("\\") && terminalInput.length > 0
-      ? protocols.filter((p) => p.cmd.toUpperCase().startsWith(terminalInput.toUpperCase()))
-      : [];
+  const { suggestions, paletteTriggerActive } = useMemo(() => {
+    const { active, matchPrefix } = stripCommandLeader(terminalInput);
+    if (!active) return { suggestions: [] as Protocol[], paletteTriggerActive: false };
+    const source = protocols.length > 0 ? protocols : DEFAULT_PROTOCOLS;
+    const list = source.filter((p) => protocolPaletteKey(p.cmd).startsWith(matchPrefix));
+    return { suggestions: list, paletteTriggerActive: true };
+  }, [terminalInput, protocols]);
 
-  const showCmdPalette = terminalInput.startsWith("\\") && suggestions.length > 0;
+  const showCmdPalette = paletteTriggerActive && suggestions.length > 0 && !suppressCmdPalette;
+
+  useEffect(() => {
+    setSuggestionIndex((i) => Math.min(i, Math.max(0, suggestions.length - 1)));
+  }, [suggestions.length, terminalInput]);
+
+  useEffect(() => {
+    if (showCmdPalette && !prevPaletteOpenRef.current) setSuggestionIndex(0);
+    prevPaletteOpenRef.current = showCmdPalette;
+  }, [showCmdPalette]);
 
   return (
     <div className="titan-safe box-border flex min-h-[100dvh] w-full max-w-[100vw] flex-col items-stretch lg:items-center lg:justify-center">
       <div className="crosshair-v" style={{ left: cross.x }} />
       <div className="crosshair-h" style={{ top: cross.y }} />
 
-      <main className="flex min-h-0 w-full max-w-[1850px] flex-1 flex-col gap-3 max-lg:pb-4 lg:mx-auto lg:h-[min(96vh,calc(100dvh-2rem))] lg:max-h-[min(96vh,calc(100dvh-2rem))] lg:flex-none lg:overflow-hidden">
+      <main className="flex min-h-0 w-full max-w-[1850px] flex-1 flex-col gap-3 max-lg:pb-4 lg:mx-auto lg:h-[min(96vh,calc(100dvh-2rem))] lg:max-h-[min(96vh,calc(100dvh-2rem))] lg:flex-none lg:overflow-x-hidden lg:overflow-y-visible">
         <header className="glass flex flex-wrap items-center justify-between gap-4 rounded-lg border-cyan-500/20 px-6 py-4 lg:px-8">
           <div className="flex flex-wrap items-center gap-6 lg:gap-12">
             <div>
@@ -522,7 +644,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-grow grid-cols-1 gap-4 max-lg:min-h-0 max-lg:overflow-visible lg:grid-cols-12 lg:overflow-hidden">
+        <div className="grid min-h-0 flex-grow grid-cols-1 gap-4 max-lg:min-h-0 max-lg:overflow-visible lg:grid-cols-12 lg:overflow-x-hidden lg:overflow-y-visible">
           <div className="glass flex min-h-0 flex-col overflow-visible rounded-lg p-6 max-lg:min-h-0 lg:col-span-3 lg:overflow-hidden">
             <h3 className="mb-3 text-[10px] font-black uppercase tracking-widest text-cyan-500 underline decoration-cyan-500/30 underline-offset-8">
               Coordinate_Registry
@@ -577,8 +699,25 @@ export default function App() {
             </div>
           </div>
 
-          <div className="glass relative flex min-h-[50vh] flex-col overflow-hidden rounded-lg border-none lg:col-span-6 lg:min-h-0">
+          <div
+            className={`glass relative flex min-h-[50vh] flex-col overflow-hidden rounded-lg border-none lg:min-h-0 ${
+              terminalCollapsed ? "lg:col-span-9" : "lg:col-span-6"
+            }`}
+          >
             <div ref={mapElRef} className="titan-map min-h-0 flex-1" />
+
+            {terminalCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setTerminalCollapsed(false)}
+                className="terminal-reopen-btn data-font absolute bottom-20 right-5 z-[1001] rounded-lg border border-cyan-500/55 bg-[rgba(6,10,16,0.92)] px-4 py-2.5 text-[9px] font-black uppercase text-cyan-300 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md max-lg:bottom-28"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="text-cyan-400" aria-hidden>
+                  <path d="M12 4L4 14h5v6h6v-6h5L12 4z" />
+                </svg>
+                Console
+              </button>
+            ) : null}
 
             <div
               className={`intel-card-inner glass absolute right-6 top-6 z-[1000] w-64 border-l-2 border-cyan-500 p-5 shadow-2xl ${
@@ -609,8 +748,24 @@ export default function App() {
             </div>
           </div>
 
-          <div className="glass flex min-h-0 flex-col overflow-hidden rounded-lg lg:col-span-3">
-            <div className="data-font flex-grow space-y-4 overflow-y-auto p-6 text-[11px] text-white/50">
+          {!terminalCollapsed ? (
+          <div className="glass flex min-h-0 flex-col overflow-x-hidden overflow-y-visible rounded-lg lg:col-span-3">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-cyan-500/20 bg-gradient-to-r from-black/40 to-transparent px-4 py-2.5">
+              <span className="data-font text-[9px] font-black uppercase tracking-[0.28em] text-cyan-400/95">
+                Console
+              </span>
+              <button
+                type="button"
+                onClick={() => setTerminalCollapsed(true)}
+                className="data-font rounded-md border border-cyan-500/25 bg-cyan-500/5 px-2.5 py-1 text-[8px] font-black uppercase tracking-wider text-cyan-200/90 transition-colors hover:border-cyan-400/50 hover:bg-cyan-500/15 hover:text-white"
+              >
+                Hide
+              </button>
+            </div>
+            <div
+              ref={logScrollRef}
+              className="data-font min-h-0 flex-grow space-y-4 overflow-y-auto overflow-x-hidden p-6 text-[11px] text-white/50"
+            >
               {logLines.map((line) => (
                 <div
                   key={line.id}
@@ -628,14 +783,21 @@ export default function App() {
               ))}
               <div ref={logEndRef} />
             </div>
-            <div className="relative border-t border-white/10 bg-black/60 p-6">
-              <div className={`cmd-directory rounded shadow-2xl ${showCmdPalette ? "active" : ""}`}>
+            <div className="relative z-[80] overflow-visible border-t border-white/10 bg-black/60 p-6">
+              <div
+                className={`cmd-directory rounded shadow-2xl ${showCmdPalette ? "active" : ""}`}
+                style={{ display: showCmdPalette ? "block" : "none" }}
+                aria-hidden={!showCmdPalette}
+              >
                 <div>
-                  {suggestions.map((m) => (
+                  {suggestions.map((m, ix) => (
                     <button
                       key={m.cmd}
                       type="button"
-                      className="flex w-full justify-between border-b border-white/5 p-3 text-left text-[10px] data-font hover:bg-cyan-500/20"
+                      className={`cmd-suggest-row flex w-full justify-between border-b border-white/5 p-3 text-left text-[10px] data-font hover:bg-cyan-500/20 ${
+                        ix === suggestionIndex ? "cmd-suggest-selected" : ""
+                      }`}
+                      onMouseEnter={() => setSuggestionIndex(ix)}
                       onClick={() => void runProtocol(m.cmd)}
                     >
                       <span className="font-black text-cyan-400">{m.cmd}</span>
@@ -649,26 +811,84 @@ export default function App() {
                 <input
                   type="text"
                   autoComplete="off"
-                  autoFocus
+                  autoFocus={!terminalCollapsed}
                   value={terminalInput}
-                  onChange={(e) => setTerminalInput(e.target.value)}
+                  onChange={(e) => {
+                    setTerminalInput(e.target.value);
+                    setHistoryIndex(-1);
+                    setSuppressCmdPalette(false);
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") void runProtocol(terminalInput);
+                    if (e.key === "Escape") {
+                      if (showCmdPalette) {
+                        e.preventDefault();
+                        setSuppressCmdPalette(true);
+                      }
+                      return;
+                    }
+
+                    if (e.key === "Tab" && showCmdPalette && suggestions.length) {
+                      e.preventDefault();
+                      const pick = suggestions[Math.min(suggestionIndex, suggestions.length - 1)];
+                      const full = protocolPaletteKey(pick.cmd);
+                      const stem = full.match(/^\\[^\s[\]]+/)?.[0] ?? pick.cmd.split(/\s/)[0] ?? pick.cmd;
+                      setTerminalInput(`${stem} `);
+                      setSuppressCmdPalette(false);
+                      return;
+                    }
+
+                    if (showCmdPalette && suggestions.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                      e.preventDefault();
+                      const len = suggestions.length;
+                      if (e.key === "ArrowDown") {
+                        setSuggestionIndex((i) => (i + 1) % len);
+                      } else {
+                        setSuggestionIndex((i) => (i - 1 + len) % len);
+                      }
+                      return;
+                    }
+
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (showCmdPalette && suggestions.length) {
+                        const pick = suggestions[Math.min(suggestionIndex, suggestions.length - 1)];
+                        void runProtocol(pick.cmd);
+                      } else {
+                        void runProtocol(terminalInput);
+                      }
+                      return;
+                    }
+
                     if (e.key === "ArrowUp") {
                       e.preventDefault();
+                      if (historyIndex === -1) historyDraftRef.current = terminalInput;
                       if (historyIndex < cmdHistory.length - 1) {
                         const next = historyIndex + 1;
                         setHistoryIndex(next);
                         setTerminalInput(cmdHistory[next] ?? "");
                       }
+                      return;
+                    }
+
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      if (historyIndex > 0) {
+                        const next = historyIndex - 1;
+                        setHistoryIndex(next);
+                        setTerminalInput(cmdHistory[next] ?? "");
+                      } else if (historyIndex === 0) {
+                        setHistoryIndex(-1);
+                        setTerminalInput(historyDraftRef.current);
+                      }
                     }
                   }}
                   className="data-font w-full border-none bg-transparent text-sm uppercase text-white outline-none placeholder:text-cyan-900"
-                  placeholder={"TYPE '\\' FOR PROTOCOLS"}
+                  placeholder="\\ OR / THEN COMMAND"
                 />
               </div>
             </div>
           </div>
+          ) : null}
         </div>
       </main>
     </div>
