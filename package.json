@@ -3,7 +3,9 @@
   "private": true,
   "description": "Root tooling: commitlint + husky (release-please runs in GitHub Actions)",
   "scripts": {
-    "prepare": "husky || true"
+    "prepare": "husky || true",
+    "db:push": "npx --yes supabase@latest db push",
+    "db:link": "npx --yes supabase@latest link"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
