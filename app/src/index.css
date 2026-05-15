@@ -101,6 +101,7 @@ body {
 .intel-card-inner {
   transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   transform: translateX(130%);
+  overflow-wrap: anywhere;
 }
 
 .intel-card-inner.visible {
@@ -114,6 +115,83 @@ body {
 
 .target-item:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.target-item-selected {
+  border-left-color: var(--neon-cyan);
+  background: rgba(0, 243, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(0, 243, 255, 0.15);
+}
+
+.registry-mini-btn {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.25rem 0.45rem;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.5);
+  transition: all 0.15s ease;
+}
+
+.registry-mini-btn:hover {
+  border-color: rgba(0, 243, 255, 0.35);
+  color: #fff;
+  background: rgba(0, 243, 255, 0.1);
+}
+
+.registry-mini-btn-danger:hover {
+  border-color: rgba(255, 49, 49, 0.45);
+  color: #ffb4b4;
+  background: rgba(255, 49, 49, 0.12);
+}
+
+.titan-action-btn {
+  transition: all 0.2s ease;
+}
+
+.titan-action-btn:hover {
+  background: var(--neon-cyan);
+  color: #000;
+}
+
+.titan-map--pin-mode .leaflet-container {
+  cursor: crosshair !important;
+}
+
+.titan-map--pin-mode .leaflet-interactive {
+  cursor: crosshair !important;
+}
+
+.map-pin-hint {
+  pointer-events: none;
+  animation: pin-hint-pulse 2s ease-in-out infinite;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .map-toolbar-btn:not(:disabled):not([aria-pressed="true"]):hover {
+    background: rgba(0, 243, 255, 0.15);
+    color: #fff;
+  }
+}
+
+@keyframes pin-hint-pulse {
+  0%,
+  100% {
+    border-color: rgba(0, 243, 255, 0.35);
+  }
+  50% {
+    border-color: rgba(0, 243, 255, 0.75);
+  }
+}
+
+.titan-marker-tip {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(6, 10, 16, 0.92) !important;
+  border: 1px solid rgba(0, 243, 255, 0.35) !important;
+  color: #e0ffff !important;
 }
 
 .cmd-directory {

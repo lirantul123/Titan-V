@@ -2,8 +2,9 @@ import type { Request, Response } from "express";
 import type { Protocol } from "../models/Protocol.js";
 
 const PROTOCOLS: Protocol[] = [
-  { cmd: "\\MODE [KEY]", info: "MAP: DARK|LIGHT|SAT|TOPO|VECTOR" },
+  { cmd: "\\MODE [KEY]", info: "MAP: MAP|SATELLITE" },
   { cmd: "\\SCAN", info: "PULL_TARGETS_FROM_API + LOG" },
+  { cmd: "\\FIT", info: "ZOOM_MAP_TO_FIT_ALL_AREAS" },
   { cmd: "\\LOCATE [ID]", info: "WARP TO TARGET (E.G. \\LOCATE 1)" },
   { cmd: "\\WEATHER [ID]", info: "FETCH_WEATHER_FOR_TARGET_INDEX" },
   { cmd: "\\ADD [QUERY]", info: "GEOCODE + POST_TARGET (E.G. \\ADD PARIS)" },

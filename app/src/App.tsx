@@ -1,11 +1,13 @@
 import type { CircleMarker, Map as LeafletMap } from "leaflet";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthPanel } from "./components/AuthPanel";
+import { MapToolbar } from "./components/MapToolbar";
+import { TargetIntelCard } from "./components/TargetIntelCard";
 import { useAuth } from "./context/AuthContext";
 import { getApiBase } from "./lib/apiBase";
 import { DEFAULT_PROTOCOLS } from "./lib/defaultProtocols";
-import { createBaseLayers, resolveMapModeKey, type MapModeKey } from "./lib/mapModes";
-import { findDuplicateTarget } from "./lib/targetDedupe";
+import { createBaseLayers, normalizeStoredMapMode, resolveMapModeKey, type MapModeKey } from "./lib/mapModes";
+import { createTargetAt, geocodeQuery, reverseGeocode } from "./lib/targetCreate";
 import type { LogLine, LogStatus, Protocol, Target } from "./lib/types";
 
 function timeLabel(): string {
@@ -42,6 +44,7 @@ export default function App() {
   sessionRef.current = session;
   const sessionAccessTokenRef = useRef<string | undefined>(undefined);
   sessionAccessTokenRef.current = session?.access_token;
+  const hadSessionRef = useRef(false);
 
   const apiBase = useRef(getApiBase());
   const mapElRef = useRef<HTMLDivElement>(null);
@@ -49,6 +52,7 @@ export default function App() {
   const leafletLibRef = useRef<typeof import("leaflet") | null>(null);
   const layersRef = useRef<ReturnType<typeof createBaseLayers> | null>(null);
   const markersRef = useRef<CircleMarker[]>([]);
+  const focusTargetRef = useRef<(id: string) => void>(() => {});
 
   const [mapReady, setMapReady] = useState(false);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -61,12 +65,11 @@ export default function App() {
 
   const [mapMode, setMapMode] = useState<MapModeKey>(() => {
     try {
-      const s = localStorage.getItem("titan_v_map_mode") as MapModeKey | null;
-      if (s && ["dark", "light", "sat", "topo", "voyager"].includes(s)) return s;
+      return normalizeStoredMapMode(localStorage.getItem("titan_v_map_mode"));
     } catch {
       /* ignore */
     }
-    return "dark";
+    return "map";
   });
 
   const [logLines, setLogLines] = useState<LogLine[]>([
@@ -76,11 +79,20 @@ export default function App() {
   const logScrollRef = useRef<HTMLDivElement>(null);
   const prevPaletteOpenRef = useRef(false);
 
-  const [intelVisible, setIntelVisible] = useState(false);
-  const [intelName, setIntelName] = useState("---");
-  const [intelCoords, setIntelCoords] = useState("0.00, 0.00");
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [intelTemp, setIntelTemp] = useState("--°C");
   const [intelWind, setIntelWind] = useState("--KM/H");
+  const [pinMode, setPinMode] = useState(() => {
+    try {
+      const s = localStorage.getItem("titan_v_map_tool");
+      if (s === "pin") return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  });
+  const [registryFilter, setRegistryFilter] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
 
   const [coordHud, setCoordHud] = useState("0.0000 | 0.0000");
   const [clock, setClock] = useState("00:00:00");
@@ -102,6 +114,22 @@ export default function App() {
   });
 
   const [cross, setCross] = useState({ x: 0, y: 0 });
+
+  const selectedTarget = useMemo(
+    () => targets.find((t) => String(t.id) === String(selectedTargetId)) ?? null,
+    [targets, selectedTargetId],
+  );
+
+  const selectedIndex = useMemo(() => {
+    if (!selectedTarget) return -1;
+    return targets.findIndex((t) => String(t.id) === String(selectedTarget.id));
+  }, [targets, selectedTarget]);
+
+  const filteredTargets = useMemo(() => {
+    const q = registryFilter.trim().toUpperCase();
+    if (!q) return targets;
+    return targets.filter((t) => t.name.toUpperCase().includes(q));
+  }, [targets, registryFilter]);
 
   const writeLog = useCallback((text: string, status: LogStatus = "default") => {
     setLogLines((prev) => {
@@ -134,6 +162,14 @@ export default function App() {
       /* ignore */
     }
   }, [terminalCollapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("titan_v_map_tool", pinMode ? "pin" : "navigate");
+    } catch {
+      /* ignore */
+    }
+  }, [pinMode]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
@@ -205,7 +241,7 @@ export default function App() {
       const layers = createBaseLayers(Leaflet);
       layersRef.current = layers;
       mapRef.current = map;
-      layers.dark.addTo(map);
+      layers.map.addTo(map);
       setMapReady(true);
     })();
 
@@ -220,25 +256,195 @@ export default function App() {
     };
   }, []);
 
+  const refreshMapView = useCallback(() => {
+    requestAnimationFrame(() => {
+      mapRef.current?.invalidateSize({ animate: false });
+    });
+  }, []);
+
   useEffect(() => {
     const map = mapRef.current;
     const layers = layersRef.current;
     if (!map || !layers) return;
+    const next = layers[mapMode];
+    if (map.hasLayer(next)) return;
     Object.values(layers).forEach((layer) => {
       if (map.hasLayer(layer)) map.removeLayer(layer);
     });
-    layers[mapMode].addTo(map);
-  }, [mapMode, mapReady]);
+    next.addTo(map);
+    refreshMapView();
+  }, [mapMode, mapReady, refreshMapView]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    refreshMapView();
+  }, [pinMode, mapReady, refreshMapView]);
+
+  const fetchWeather = useCallback(async (lat: number, lon: number) => {
+    try {
+      const res = await apiFetch(
+        `${apiBase.current}/api/v1/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+      );
+      if (!res.ok) return null;
+      const data = (await res.json()) as { current_weather?: { temperature: number; windspeed: number } };
+      return data.current_weather ?? null;
+    } catch {
+      return null;
+    }
+  }, [apiFetch]);
+
+  const focusTarget = useCallback(
+    async (id: string, opts: { fly?: boolean; silent?: boolean } = {}) => {
+      const target = targetsRef.current.find((t) => String(t.id) === String(id));
+      const map = mapRef.current;
+      if (!target) return;
+      setSelectedTargetId(String(target.id));
+      if (map && opts.fly !== false) {
+        map.flyTo([target.lat, target.lon], Math.max(map.getZoom(), 10), { duration: 0.8 });
+      }
+      if (!opts.silent) writeLog(`FOCUS: ${target.name}`, "cmd");
+    },
+    [writeLog],
+  );
+
+  focusTargetRef.current = (id) => {
+    void focusTarget(id, { fly: true, silent: true });
+  };
+
+  useEffect(() => {
+    if (!selectedTarget) {
+      setIntelTemp("--°C");
+      setIntelWind("--KM/H");
+      return;
+    }
+    const targetId = String(selectedTarget.id);
+    let cancelled = false;
+    void (async () => {
+      const w = await fetchWeather(selectedTarget.lat, selectedTarget.lon);
+      if (cancelled || String(selectedTargetId) !== targetId) return;
+      if (w) {
+        setIntelTemp(`${w.temperature}°C`);
+        setIntelWind(`${w.windspeed}KM/H`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTarget, selectedTargetId, fetchWeather]);
+
+  useEffect(() => {
+    if (!authReady || !supabaseEnabled) return;
+    if (session) {
+      hadSessionRef.current = true;
+      return;
+    }
+    if (hadSessionRef.current) {
+      hadSessionRef.current = false;
+      setTargets([]);
+      setSelectedTargetId(null);
+    }
+  }, [authReady, supabaseEnabled, session]);
 
   useEffect(() => {
     const map = mapRef.current;
     const L = leafletLibRef.current;
     if (!map || !L) return;
     markersRef.current.forEach((m) => map.removeLayer(m));
-    markersRef.current = targets.map((t) =>
-      L.circleMarker([t.lat, t.lon], { radius: 8, color: "#00f3ff", fillOpacity: 0.4 }).addTo(map),
-    );
-  }, [targets, mapReady]);
+    markersRef.current = targets.map((t, i) => {
+      const selected = String(t.id) === String(selectedTargetId);
+      const marker = L.circleMarker([t.lat, t.lon], {
+        radius: selected ? 12 : 8,
+        color: selected ? "#ffffff" : "#00f3ff",
+        weight: selected ? 3 : 2,
+        fillColor: "#00f3ff",
+        fillOpacity: selected ? 0.7 : 0.4,
+      });
+      marker.bindTooltip(`[${i + 1}] ${t.name}`, {
+        direction: "top",
+        className: "titan-marker-tip",
+        opacity: 0.95,
+      });
+      marker.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        focusTargetRef.current(String(t.id));
+      });
+      marker.addTo(map);
+      return marker;
+    });
+  }, [targets, mapReady, selectedTargetId]);
+
+  const fitAllTargets = useCallback(() => {
+    const map = mapRef.current;
+    const L = leafletLibRef.current;
+    const list = targetsRef.current;
+    if (!map || !L || !list.length) {
+      writeLog("NO_AREAS_TO_FIT", "error");
+      return;
+    }
+    const bounds = L.latLngBounds(list.map((t) => [t.lat, t.lon] as [number, number]));
+    if (!bounds.isValid()) {
+      writeLog("FIT_VIEW_FAILED", "error");
+      return;
+    }
+    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest();
+    const isPoint = ne.lat === sw.lat && ne.lng === sw.lng;
+    if (isPoint) {
+      map.flyTo(bounds.getCenter(), 11, { duration: 0.8 });
+    } else {
+      map.flyToBounds(bounds, { padding: [56, 56], maxZoom: 12, duration: 0.8 });
+    }
+    refreshMapView();
+    writeLog(`FIT_VIEW: ${list.length} NODES`, "cmd");
+  }, [writeLog, refreshMapView]);
+
+  const handleMapZoomIn = useCallback(() => {
+    mapRef.current?.zoomIn();
+    refreshMapView();
+  }, [refreshMapView]);
+
+  const handleMapZoomOut = useCallback(() => {
+    mapRef.current?.zoomOut();
+    refreshMapView();
+  }, [refreshMapView]);
+
+  const pinAtCoords = useCallback(
+    async (lat: number, lon: number) => {
+      if (pinBusy) return;
+      setPinBusy(true);
+      writeLog(`PINNING ${lat.toFixed(4)}, ${lon.toFixed(4)}...`, "cmd");
+      try {
+        const hit =
+          (await reverseGeocode(apiFetch, apiBase.current, lat, lon)) ??
+          ({ lat, lon, displayName: `PIN ${lat.toFixed(3)}, ${lon.toFixed(3)}` } as const);
+        const result = await createTargetAt(apiFetch, apiBase.current, targetsRef.current, hit);
+        if (!result.ok) {
+          writeLog(result.message, result.reason === "duplicate" ? "error" : "error");
+          return;
+        }
+        setTargets((prev) => [...prev, result.target]);
+        await focusTarget(String(result.target.id), { fly: true, silent: true });
+        writeLog(`PINNED: ${result.target.name}`, "cmd");
+      } catch {
+        writeLog("PIN_FAILED", "error");
+      } finally {
+        setPinBusy(false);
+      }
+    },
+    [apiFetch, focusTarget, pinBusy, writeLog],
+  );
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !pinMode) return;
+    const onClick = (e: { latlng: { lat: number; lng: number } }) => {
+      void pinAtCoords(e.latlng.lat, e.latlng.lng);
+    };
+    map.on("click", onClick);
+    return () => {
+      map.off("click", onClick);
+    };
+  }, [mapReady, pinMode, pinAtCoords]);
 
   const setMode = useCallback(
     (mode: MapModeKey, opts: { silent?: boolean } = {}) => {
@@ -256,19 +462,6 @@ export default function App() {
     },
     [writeLog],
   );
-
-  const fetchWeather = useCallback(async (lat: number, lon: number) => {
-    try {
-      const res = await apiFetch(
-        `${apiBase.current}/api/v1/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
-      );
-      if (!res.ok) return null;
-      const data = (await res.json()) as { current_weather?: { temperature: number; windspeed: number } };
-      return data.current_weather ?? null;
-    } catch {
-      return null;
-    }
-  }, [apiFetch]);
 
   const syncFromApi = useCallback(
     async (opts: { quiet?: boolean } = {}) => {
@@ -344,43 +537,29 @@ export default function App() {
         writeLog("NO_RESULTS", "error");
         return;
       }
-      const name = hit.displayName.split(",")[0].toUpperCase();
-      if (findDuplicateTarget(targetsRef.current, name, hit.lat, hit.lon)) {
-        writeLog("DUPLICATE — ALREADY_IN_REGISTRY (SAME LABEL OR COORDS)", "error");
+      const result = await createTargetAt(apiFetch, apiBase.current, targetsRef.current, hit);
+      if (!result.ok) {
+        writeLog(result.message, "error");
         return;
       }
-      const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
-      });
-      const created = (await createRes.json().catch(() => ({}))) as { message?: string; target?: Target; error?: string };
-      if (createRes.status === 409) {
-        writeLog(created.message || "DUPLICATE — ALREADY_IN_REGISTRY", "error");
-        return;
-      }
-      if (!createRes.ok || !created.target) {
-        writeLog(created.message || "TARGET_CREATE_FAILED", "error");
-        return;
-      }
-      const node: Target = {
-        id: created.target.id,
-        name: created.target.name,
-        lat: created.target.lat,
-        lon: created.target.lon,
-      };
-      setTargets((prev) => [...prev, node]);
-      writeLog(`LOCKED: ${node.name}`, "cmd");
+      setTargets((prev) => [...prev, result.target]);
+      await focusTarget(String(result.target.id), { fly: true, silent: true });
+      writeLog(`LOCKED: ${result.target.name}`, "cmd");
       setSearchQuery("");
     } catch {
       writeLog("NET_ERROR", "error");
     }
-  }, [searchQuery, writeLog, apiFetch]);
+  }, [searchQuery, writeLog, apiFetch, focusTarget]);
 
   const removeNode = useCallback(
-    async (id: string) => {
+    async (id: string, opts: { confirm?: boolean } = {}) => {
       const index = targetsRef.current.findIndex((t) => String(t.id) === String(id));
       if (index < 0) return;
+      const node = targetsRef.current[index];
+      if (opts.confirm !== false) {
+        const label = node.name.length > 48 ? `${node.name.slice(0, 48)}…` : node.name;
+        if (!window.confirm(`Remove area [${index + 1}] ${label}?`)) return;
+      }
       try {
         const res = await apiFetch(`${apiBase.current}/api/v1/targets/${encodeURIComponent(id)}`, {
           method: "DELETE",
@@ -391,10 +570,10 @@ export default function App() {
         return;
       }
       setTargets((prev) => prev.filter((t) => String(t.id) !== String(id)));
+      if (String(selectedTargetId) === String(id)) setSelectedTargetId(null);
       writeLog("NODE_REMOVED", "error");
-      setIntelVisible(false);
     },
-    [writeLog, apiFetch],
+    [writeLog, apiFetch, selectedTargetId],
   );
 
   const runProtocol = useCallback(
@@ -404,7 +583,6 @@ export default function App() {
       const cmd = parts[0];
       const arg = parts[1];
       const rest = parts.slice(1).join(" ").trim();
-      const map = mapRef.current;
 
       setCmdHistory((h) => [raw, ...h]);
       setHistoryIndex(-1);
@@ -421,8 +599,8 @@ export default function App() {
           .replace(/[^A-Z0-9]/g, "");
         const mode = resolveMapModeKey(token);
         if (!mode) {
-          writeLog("MODE_USAGE: \\MODE DARK | LIGHT | SAT | TOPO | VECTOR", "error");
-          writeLog("ALIASES: GRID, DAY, SAT_STREAM, TERRAIN, VOYAGER", "default");
+          writeLog("MODE_USAGE: \\MODE MAP | SATELLITE", "error");
+          writeLog("ALIASES: ROAD, SAT, IMAGERY", "default");
         } else setMode(mode);
       } else if (cmd === "\\SCAN" || cmd === "SCAN") {
         writeLog("INIT_SCAN...", "cmd");
@@ -439,18 +617,12 @@ export default function App() {
         }
       } else if (cmd === "\\LOCATE" || cmd === "LOCATE") {
         const target = targetsRef.current[parseInt(arg, 10) - 1] ?? targetsRef.current[targetsRef.current.length - 1];
-        if (target && map) {
-          map.flyTo([target.lat, target.lon], 11);
-          setIntelVisible(true);
-          setIntelName(target.name);
-          setIntelCoords(`${Number(target.lat).toFixed(4)}, ${Number(target.lon).toFixed(4)}`);
-          const w = await fetchWeather(target.lat, target.lon);
-          if (w) {
-            setIntelTemp(`${w.temperature}°C`);
-            setIntelWind(`${w.windspeed}KM/H`);
-          }
+        if (target) {
+          await focusTarget(String(target.id));
           writeLog(`JUMP_SUCCESS: ${target.name}`, "cmd");
         } else writeLog("INVALID_NODE_ID", "error");
+      } else if (cmd === "\\FIT" || cmd === "FIT") {
+        fitAllTargets();
       } else if (cmd === "\\WEATHER" || cmd === "WEATHER") {
         const idx = parseInt(arg, 10) - 1;
         const target = targetsRef.current[idx];
@@ -464,51 +636,19 @@ export default function App() {
         if (!rest) writeLog("ADD_USAGE: \\ADD <LOCATION_QUERY>", "error");
         else {
           try {
-            const res = await apiFetch(`${apiBase.current}/api/v1/geocode`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ q: rest }),
-            });
-            const payload = (await res.json().catch(() => ({}))) as {
-              message?: string;
-              results?: { lat: number; lon: number; displayName: string }[];
-            };
-            if (!res.ok) writeLog(payload.message || "GEOCODE_FAILED", "error");
+            const results = await geocodeQuery(apiFetch, apiBase.current, rest);
+            const hit = results[0];
+            if (!hit) writeLog("NO_RESULTS", "error");
             else {
-              const hit = payload.results?.[0];
-              if (!hit) writeLog("NO_RESULTS", "error");
+              const result = await createTargetAt(apiFetch, apiBase.current, targetsRef.current, hit);
+              if (!result.ok) writeLog(result.message, "error");
               else {
-                const name = hit.displayName.split(",")[0].toUpperCase();
-                if (findDuplicateTarget(targetsRef.current, name, hit.lat, hit.lon)) {
-                  writeLog("DUPLICATE — ALREADY_IN_REGISTRY (SAME LABEL OR COORDS)", "error");
-                } else {
-                  const createRes = await apiFetch(`${apiBase.current}/api/v1/targets`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name, lat: hit.lat, lon: hit.lon }),
-                  });
-                  const created = (await createRes.json().catch(() => ({}))) as {
-                    message?: string;
-                    target?: Target;
-                    error?: string;
-                  };
-                  if (createRes.status === 409) writeLog(created.message || "DUPLICATE — ALREADY_IN_REGISTRY", "error");
-                  else if (!createRes.ok || !created.target) writeLog(created.message || "TARGET_CREATE_FAILED", "error");
-                  else {
-                    const node: Target = {
-                      id: created.target.id,
-                      name: created.target.name,
-                      lat: created.target.lat,
-                      lon: created.target.lon,
-                    };
-                    setTargets((prev) => [...prev, node]);
-                    writeLog(`LOCKED_VIA_CMD: ${node.name}`, "cmd");
-                  }
-                }
+                setTargets((prev) => [...prev, result.target]);
+                writeLog(`LOCKED_VIA_CMD: ${result.target.name}`, "cmd");
               }
             }
-          } catch {
-            writeLog("NET_ERROR", "error");
+          } catch (e) {
+            writeLog(e instanceof Error ? e.message : "NET_ERROR", "error");
           }
         }
       } else if (cmd === "\\GEOCODE" || cmd === "GEOCODE") {
@@ -576,22 +716,20 @@ export default function App() {
         protocolsRef.current.forEach((p) => writeLog(`${p.cmd} >> ${p.info}`));
         writeLog("ARGS: USE SPACE AFTER COMMAND (E.G. \\ADD LONDON). \\LOCATE USES LIST INDEX.", "default");
         writeLog("TERMINAL: ↑↓ HISTORY | ↑↓ IN MENU (WHEN OPEN) | TAB COMPLETE | ESC CLOSE MENU", "default");
+        writeLog("MAP: TOOLBAR ⊕ PIN MODE | CLICK MARKERS | FILTER REGISTRY | \\FIT ALL AREAS", "default");
       } else {
         writeLog(`UNKNOWN_CMD: ${cmd}`, "error");
       }
 
       setTerminalInput("");
     },
-    [writeLog, fetchWeather, setMode, syncFromApi, apiFetch],
+    [writeLog, fetchWeather, setMode, syncFromApi, apiFetch, focusTarget, fitAllTargets],
   );
 
-  const modeKeys: MapModeKey[] = ["dark", "light", "sat", "topo", "voyager"];
+  const modeKeys: MapModeKey[] = ["map", "satellite"];
   const modeLabels: Record<MapModeKey, string> = {
-    dark: "GRID",
-    light: "DAY",
-    sat: "SAT",
-    topo: "TOPO",
-    voyager: "VECTOR",
+    map: "MAP",
+    satellite: "SATELLITE",
   };
 
   const { suggestions, paletteTriggerActive } = useMemo(() => {
@@ -623,7 +761,7 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-6 lg:gap-12">
             <div>
               <h1 className="text-3xl font-black uppercase italic leading-none tracking-tighter text-white">Titan-V</h1>
-              <span className="data-font text-[9px] font-bold tracking-[0.4em] text-cyan-400">MULTI_MODE_MAP</span>
+              <span className="data-font text-[9px] font-bold tracking-[0.4em] text-cyan-400">MAP_SATELLITE</span>
             </div>
             <div className="flex max-w-[520px] flex-wrap justify-end gap-1.5 max-lg:max-w-none max-lg:gap-2">
               {modeKeys.map((m) => (
@@ -657,32 +795,59 @@ export default function App() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void addTarget();
+                }}
                 className="data-font flex-grow border border-white/10 bg-black/50 p-3 text-xs uppercase text-white outline-none focus:border-cyan-500"
                 placeholder="LOC_QUERY"
               />
               <button
                 type="button"
                 onClick={() => void addTarget()}
-                className="border border-cyan-500/40 bg-cyan-500/10 px-4 text-[10px] font-black text-cyan-400 transition-all hover:bg-cyan-500 hover:text-black"
+                className="titan-action-btn border border-cyan-500/40 bg-cyan-500/10 px-4 text-[10px] font-black text-cyan-400"
               >
                 LOAD
               </button>
             </div>
+            <input
+              type="text"
+              value={registryFilter}
+              onChange={(e) => setRegistryFilter(e.target.value)}
+              className="data-font mb-4 w-full border border-white/10 bg-black/40 px-3 py-2 text-[10px] uppercase text-white/80 outline-none focus:border-cyan-500/50"
+              placeholder="FILTER AREAS"
+            />
             <div className="flex-grow space-y-2 overflow-y-auto pr-2">
-              {targets.map((node, i) => (
+              {filteredTargets.length === 0 ? (
+                <p className="data-font px-2 py-6 text-center text-[10px] text-white/25">
+                  {targets.length ? "NO MATCHES" : "NO AREAS — SEARCH OR PIN ON MAP"}
+                </p>
+              ) : null}
+              {filteredTargets.map((node) => {
+                const i = targets.findIndex((t) => String(t.id) === String(node.id));
+                const selected = String(node.id) === String(selectedTargetId);
+                return (
                 <div
                   key={node.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => void runProtocol(`\\LOCATE ${i + 1}`)}
+                  onClick={() => void focusTarget(String(node.id))}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") void runProtocol(`\\LOCATE ${i + 1}`);
+                    if (e.key === "Enter" || e.key === " ") void focusTarget(String(node.id));
                   }}
-                  className="target-item flex cursor-pointer items-center justify-between rounded bg-white/5 p-4 text-[10px] data-font"
+                  className={`target-item group flex cursor-pointer items-center justify-between rounded p-4 text-[10px] data-font ${
+                    selected ? "target-item-selected" : "bg-white/5"
+                  }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="font-black text-cyan-500">[{i + 1}]</span>
-                    <span className="font-bold text-white">{node.name}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-3">
+                      <span className="font-black text-cyan-500">[{i + 1}]</span>
+                      <span className="line-clamp-2 break-words font-bold leading-snug text-white" title={node.name}>
+                        {node.name}
+                      </span>
+                    </div>
+                    <p className="data-font mt-1 pl-7 text-[9px] text-white/25">
+                      {node.lat.toFixed(3)}, {node.lon.toFixed(3)}
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -690,12 +855,13 @@ export default function App() {
                       e.stopPropagation();
                       void removeNode(node.id);
                     }}
-                    className="btn-delete px-2 text-xs font-black"
+                    className="registry-mini-btn registry-mini-btn-danger shrink-0 opacity-60 group-hover:opacity-100"
                   >
                     ✕
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -704,46 +870,71 @@ export default function App() {
               terminalCollapsed ? "lg:col-span-9" : "lg:col-span-6"
             }`}
           >
-            <div ref={mapElRef} className="titan-map min-h-0 flex-1" />
-
-            {terminalCollapsed ? (
-              <button
-                type="button"
-                onClick={() => setTerminalCollapsed(false)}
-                className="terminal-reopen-btn data-font absolute bottom-20 right-5 z-[1001] rounded-lg border border-cyan-500/55 bg-[rgba(6,10,16,0.92)] px-4 py-2.5 text-[9px] font-black uppercase text-cyan-300 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md max-lg:bottom-28"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="text-cyan-400" aria-hidden>
-                  <path d="M12 4L4 14h5v6h6v-6h5L12 4z" />
-                </svg>
-                Console
-              </button>
-            ) : null}
-
             <div
-              className={`intel-card-inner glass absolute right-6 top-6 z-[1000] w-64 border-l-2 border-cyan-500 p-5 shadow-2xl ${
-                intelVisible ? "visible" : ""
-              }`}
+              className={`relative min-h-0 flex-1 ${pinMode ? "titan-map--pin-mode" : ""}`}
             >
-              <span className="data-font mb-4 block text-[8px] font-bold uppercase tracking-widest text-cyan-400">
-                Atmospheric_Telemetry
-              </span>
-              <h2 className="mb-1 text-xl font-black uppercase tracking-tighter text-white">{intelName}</h2>
-              <p className="data-font mb-6 text-[10px] tracking-widest text-white/30">{intelCoords}</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded border border-white/5 bg-black/40 p-3">
-                  <span className="mb-1 block text-[8px] uppercase text-white/20">Heat</span>
-                  <span className="data-font text-lg font-bold text-white">{intelTemp}</span>
-                </div>
-                <div className="rounded border border-white/5 bg-black/40 p-3">
-                  <span className="mb-1 block text-[8px] uppercase text-white/20">Wind</span>
-                  <span className="data-font text-lg font-bold text-white">{intelWind}</span>
-                </div>
-              </div>
-            </div>
+              <div ref={mapElRef} className="titan-map absolute inset-0 z-0" />
 
-            <div className="absolute bottom-6 left-6 z-[1000]">
-              <div className="border border-white/10 bg-black/90 px-4 py-2">
-                <span className="data-font text-xs font-bold tracking-widest text-cyan-400">{coordHud}</span>
+              <MapToolbar
+                pinMode={pinMode}
+                pinBusy={pinBusy}
+                onPinModeChange={setPinMode}
+                onZoomIn={handleMapZoomIn}
+                onZoomOut={handleMapZoomOut}
+                onFitAll={() => fitAllTargets()}
+                areaCount={targets.length}
+              />
+
+              <TargetIntelCard
+              visible={selectedTarget !== null}
+              target={selectedTarget}
+              index={selectedIndex >= 0 ? selectedIndex : 0}
+              temp={intelTemp}
+              wind={intelWind}
+              onClose={() => setSelectedTargetId(null)}
+              onCenter={() => {
+                if (selectedTarget) void focusTarget(String(selectedTarget.id), { fly: true, silent: true });
+              }}
+              onRefreshWeather={() => {
+                if (!selectedTarget) return;
+                const id = String(selectedTarget.id);
+                setIntelTemp("--°C");
+                setIntelWind("--KM/H");
+                void fetchWeather(selectedTarget.lat, selectedTarget.lon).then((w) => {
+                  if (String(selectedTargetId) !== id || !w) return;
+                  setIntelTemp(`${w.temperature}°C`);
+                  setIntelWind(`${w.windspeed}KM/H`);
+                });
+              }}
+              onRemove={() => {
+                if (selectedTarget) void removeNode(selectedTarget.id);
+              }}
+              onCopyCoords={() => {
+                if (!selectedTarget) return;
+                const text = `${selectedTarget.lat.toFixed(5)}, ${selectedTarget.lon.toFixed(5)}`;
+                void navigator.clipboard.writeText(text).then(
+                  () => writeLog(`COPIED: ${text}`, "cmd"),
+                  () => writeLog("CLIPBOARD_FAILED", "error"),
+                );
+              }}
+            />
+
+              <div className="absolute bottom-6 left-6 right-6 z-[1000] flex items-center justify-between gap-3">
+                <div className="pointer-events-none border border-white/10 bg-black/90 px-4 py-2">
+                  <span className="data-font text-xs font-bold tracking-widest text-cyan-400">{coordHud}</span>
+                </div>
+                {terminalCollapsed ? (
+                  <button
+                    type="button"
+                    onClick={() => setTerminalCollapsed(false)}
+                    className="terminal-reopen-btn data-font shrink-0 rounded-lg border border-cyan-500/55 bg-[rgba(6,10,16,0.92)] px-4 py-2 text-[9px] font-black uppercase text-cyan-300 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="text-cyan-400" aria-hidden>
+                      <path d="M12 4L4 14h5v6h6v-6h5L12 4z" />
+                    </svg>
+                    Console
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>

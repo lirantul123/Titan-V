@@ -17,15 +17,18 @@ export function AuthScreen() {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   useEffect(() => {
     setPassword("");
     setConfirm("");
     setErr(null);
+    setInfo(null);
   }, [tab]);
 
   const resetFeedback = useCallback(() => {
     setErr(null);
+    setInfo(null);
   }, []);
 
   const onSignIn = useCallback(async () => {
@@ -66,6 +69,8 @@ export function AuthScreen() {
       navigate("/", { replace: true });
       return;
     }
+    setInfo("Check your email to confirm the account, then sign in.");
+    setTab("signin");
   }, [confirm, email, navigate, password, resetFeedback, signUpWithPassword]);
 
   if (authReady && session) {
@@ -213,6 +218,7 @@ export function AuthScreen() {
         </div>
 
         {err ? <p className="data-font mt-5 text-center text-sm text-red-400">{err}</p> : null}
+        {info ? <p className="data-font mt-5 text-center text-sm text-cyan-300/90">{info}</p> : null}
       </div>
     </div>
   );

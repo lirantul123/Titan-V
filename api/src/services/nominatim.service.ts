@@ -43,3 +43,37 @@ export async function searchNominatim(q: string): Promise<GeocodeHit[]> {
     }))
     .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
 }
+
+type NominatimReverseRow = {
+  lat: string;
+  lon: string;
+  display_name: string;
+};
+
+export async function reverseNominatim(lat: number, lon: number): Promise<GeocodeHit | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+
+  const url = new URL("https://nominatim.openstreetmap.org/reverse");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lon", String(lon));
+  url.searchParams.set("zoom", "14");
+
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json",
+    },
+  });
+
+  if (!res.ok) throw new Error(`NOMINATIM_HTTP_${res.status}`);
+
+  const row = (await res.json()) as NominatimReverseRow;
+  if (!row?.display_name) return null;
+
+  const rLat = Number(row.lat);
+  const rLon = Number(row.lon);
+  if (!Number.isFinite(rLat) || !Number.isFinite(rLon)) return null;
+
+  return { lat: rLat, lon: rLon, displayName: row.display_name };
+}

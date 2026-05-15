@@ -6,7 +6,7 @@
 
 ## Features
 
-- **Map modes:** Five basemaps (Carto dark / light / Voyager, Esri imagery, Esri topo), switchable from the header or via `\MODE`. Last choice is stored in the browser as `titan_v_map_mode`.
+- **Map modes:** **MAP** (labeled streets) and **SATELLITE** (Esri imagery), switchable from the header or via `\MODE MAP` / `\MODE SATELLITE`. Last choice is stored in the browser as `titan_v_map_mode`.
 - **Coordinate registry:** Geocode a place, add targets, fly to them by index, remove entries. Registry data is persisted in the **API** while the server runs (in-memory store).
 - **Terminal:** Protocol autocomplete (`\`), command history (arrow up), and `\HELP` for the full index.
 - **Telemetry:** After `\LOCATE` or from `\WEATHER`, temperature and wind are loaded through the API (Open-Meteo on the server).
@@ -69,7 +69,7 @@ Enter commands in the bottom-right terminal. Prefix with `\` (autocomplete lists
 
 | Protocol | Arguments | Description |
 | :--- | :--- | :--- |
-| `\MODE` | `DARK` \| `LIGHT` \| `SAT` \| `TOPO` \| `VECTOR` | Switches basemap (aliases: `GRID`, `DAY`, `SAT_STREAM`, `TERRAIN`, `VOYAGER`). |
+| `\MODE` | `MAP` \| `SATELLITE` | Switches basemap (aliases: `ROAD`, `SAT`, `IMAGERY`). |
 | `\LOCATE` | `[index]` | Flies to the registry row with that index (e.g. `\LOCATE 1`). |
 | `\WEATHER` | `[index]` | Logs current weather for that target via the API. |
 | `\ADD` | `<query>` | Geocodes and creates a target (same flow as LOAD). |
